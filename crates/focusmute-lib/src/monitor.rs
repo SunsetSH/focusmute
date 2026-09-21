@@ -31,6 +31,7 @@ pub struct MuteIndicator {
     mute_color: u32,
     strategy: led::MuteStrategy,
     render_mode: led::IndicatorRenderMode,
+    blink_while_muted: bool,
     next_blink: Option<Instant>,
     blink_off: bool,
 }
@@ -49,6 +50,7 @@ impl MuteIndicator {
             mute_color,
             strategy,
             render_mode: led::IndicatorRenderMode::Auto,
+            blink_while_muted: false,
             next_blink: None,
             blink_off: false,
         }
@@ -122,9 +124,18 @@ impl MuteIndicator {
         self.blink_off = false;
     }
 
+    pub fn set_blink_while_muted(&mut self, enabled: bool) {
+        self.blink_while_muted = enabled;
+        self.next_blink = None;
+        self.blink_off = false;
+    }
+
     /// Independent of input level: one complete mute blink per second.
     pub fn animate(&mut self, device: &impl ScarlettDevice, now: Instant) -> Result<()> {
-        if !self.is_muted() || self.render_mode != led::IndicatorRenderMode::NumbersBlink {
+        if !self.is_muted()
+            || (!self.blink_while_muted
+                && self.render_mode != led::IndicatorRenderMode::NumbersBlink)
+        {
             self.next_blink = None;
             self.blink_off = false;
             return Ok(());

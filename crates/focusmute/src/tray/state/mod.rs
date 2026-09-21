@@ -157,6 +157,9 @@ impl TrayState {
         indicator.set_render_mode(led::IndicatorRenderMode::from_config(
             &config.indicator.mode,
         ));
+        indicator.set_blink_while_muted(
+            config.indicator.blink_while_muted || config.indicator.mode == "numbers_blink",
+        );
 
         Ok(TrayState {
             config,
@@ -184,6 +187,9 @@ impl TrayState {
         indicator.set_render_mode(led::IndicatorRenderMode::from_config(
             &config.indicator.mode,
         ));
+        indicator.set_blink_while_muted(
+            config.indicator.blink_while_muted || config.indicator.mode == "numbers_blink",
+        );
 
         TrayState {
             config,
@@ -301,6 +307,9 @@ impl TrayState {
             .set_render_mode(led::IndicatorRenderMode::from_config(
                 &new_config.indicator.mode,
             ));
+        self.indicator.set_blink_while_muted(
+            new_config.indicator.blink_while_muted || new_config.indicator.mode == "numbers_blink",
+        );
 
         // Update autostart
         if new_config.system.autostart != self.config.system.autostart {

@@ -43,6 +43,10 @@ pub struct IndicatorConfig {
     #[serde(default)]
     pub blink_on_talk: bool,
 
+    /// Blink the mute indication continuously (500 ms on/off) while muted.
+    #[serde(default)]
+    pub blink_while_muted: bool,
+
     /// Input level above which muted talk triggers blinking, in the
     /// device's raw linear meter units: 0 = silence, 4095 = full scale.
     /// Measured on a 2i2: quiet-room ambient reads single digits, speech
@@ -65,6 +69,7 @@ impl Default for IndicatorConfig {
             mute_inputs: default_mute_inputs(),
             input_colors: HashMap::new(),
             blink_on_talk: false,
+            blink_while_muted: false,
             talk_threshold: default_talk_threshold(),
             mode: default_indicator_mode(),
         }

@@ -14,6 +14,8 @@ pub enum IndicatorRenderMode {
     Auto,
     Numbers,
     NumbersBlink,
+    /// Both input numbers and the two Output indicators.
+    Extended,
     HalosSolid,
 }
 
@@ -22,6 +24,7 @@ impl IndicatorRenderMode {
         match value.trim().to_ascii_lowercase().as_str() {
             "numbers" => Self::Numbers,
             "numbers_blink" => Self::NumbersBlink,
+            "extended" => Self::Extended,
             "halos_solid" => Self::HalosSolid,
             _ => Self::Auto,
         }

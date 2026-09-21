@@ -32,6 +32,8 @@ pub fn tr(language: &str, key: &str) -> &'static str {
         "auto" => "Автоматически",
         "numbers" => "Только номера",
         "numbers_blink" => "Мигание при mute",
+        "extended" => "Расширенная",
+        "blink_while_muted" => "Мигание при mute",
         "solo_number_note" => {
             "Solo: mute подсвечивает выбранный номер канала: 1 (LED 4), 2 (LED 12) или оба. После unmute номера возвращаются в белый цвет."
         }
@@ -125,6 +127,8 @@ fn english(key: &str) -> &'static str {
         "auto" => "Auto",
         "numbers" => "Numbers only",
         "numbers_blink" => "Blink while muted",
+        "extended" => "Extended",
+        "blink_while_muted" => "Blink while muted",
         "solo_number_note" => {
             "Solo: mute lights the selected channel number: 1 (LED 4), 2 (LED 12), or both. Unmute restores those numbers to white."
         }

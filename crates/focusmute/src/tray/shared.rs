@@ -516,8 +516,7 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
         // 3c. Muted-talk blink — rides the ~50 ms loop wake; reads meters at
         // most every METER_INTERVAL while muted with the feature enabled.
         if state.config.indicator.blink_on_talk
-            && state.indicator.render_mode()
-                != focusmute_lib::led::IndicatorRenderMode::NumbersBlink
+            && !state.config.indicator.blink_while_muted
             && state.indicator.is_muted()
             && let Some(ref dev) = device
         {

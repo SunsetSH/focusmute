@@ -117,8 +117,8 @@ pub fn show_settings(
 
         let options = eframe::NativeOptions {
             viewport: eframe::egui::ViewportBuilder::default()
-                .with_inner_size([520.0, 420.0])
-                .with_min_inner_size([470.0, 330.0])
+                .with_inner_size([640.0, 420.0])
+                .with_min_inner_size([580.0, 330.0])
                 .with_resizable(true)
                 .with_title("FocusMute Settings")
                 .with_icon(crate::icon::app_icon()),

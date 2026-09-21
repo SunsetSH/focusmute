@@ -76,6 +76,7 @@ pub struct SettingsApp {
     input_count: usize,
 
     blink_on_talk: bool,
+    blink_while_muted: bool,
     talk_threshold: u32,
     meter_device: Option<PlatformDevice>,
     meter_levels: Vec<u32>,
@@ -259,7 +260,10 @@ impl SettingsApp {
             hotkey: config.keyboard.hotkey.clone(),
             ptt_hotkey: config.keyboard.push_to_talk_hotkey.clone(),
             capturing: None,
-            indicator_mode: if config.indicator.mode == "halos_solid" {
+            indicator_mode: if matches!(
+                config.indicator.mode.as_str(),
+                "halos_solid" | "numbers_blink"
+            ) {
                 "numbers".into()
             } else {
                 config.indicator.mode.clone()
@@ -274,6 +278,8 @@ impl SettingsApp {
             input_count,
 
             blink_on_talk: config.indicator.blink_on_talk,
+            blink_while_muted: config.indicator.blink_while_muted
+                || config.indicator.mode == "numbers_blink",
             talk_threshold: config.indicator.talk_threshold,
             meter_device: open_device_by_serial(&config.system.device_serial).ok(),
             meter_levels: Vec::new(),
@@ -347,6 +353,7 @@ impl SettingsApp {
             browser_sync_port: &self.browser_sync_port,
             browser_sync_reverse: self.browser_sync_reverse,
             blink_on_talk: self.blink_on_talk,
+            blink_while_muted: self.blink_while_muted,
             talk_threshold: self.talk_threshold,
             original: &self.original,
             max_sound_bytes: MAX_SOUND_FILE_BYTES,
@@ -520,6 +527,7 @@ impl SettingsApp {
             browser_sync_port: self.browser_sync_port.clone(),
             browser_sync_reverse: self.browser_sync_reverse,
             blink_on_talk: self.blink_on_talk,
+            blink_while_muted: self.blink_while_muted,
             talk_threshold: self.talk_threshold,
         }
     }
@@ -552,6 +560,7 @@ struct FormSnapshot {
     browser_sync_port: String,
     browser_sync_reverse: bool,
     blink_on_talk: bool,
+    blink_while_muted: bool,
     talk_threshold: u32,
 }
 
@@ -626,11 +635,11 @@ impl eframe::App for SettingsApp {
                             tr("mute_display_tip"),
                         );
                         egui::ComboBox::from_id_salt("indicator_mode_combo")
-                            .selected_text(tr(if self.indicator_mode == "numbers_blink" { "numbers_blink" } else if self.indicator_mode == "numbers" { "numbers" } else { "auto" }))
+                            .selected_text(tr(if self.indicator_mode == "extended" { "extended" } else if self.indicator_mode == "numbers" { "numbers" } else { "auto" }))
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(&mut self.indicator_mode, "auto".to_string(), tr("auto"));
                                 ui.selectable_value(&mut self.indicator_mode, "numbers".to_string(), tr("numbers"));
-                                ui.selectable_value(&mut self.indicator_mode, "numbers_blink".to_string(), tr("numbers_blink"));
+                                ui.selectable_value(&mut self.indicator_mode, "extended".to_string(), tr("extended"));
                             });
                         ui.end_row();
 
@@ -658,14 +667,20 @@ impl eframe::App for SettingsApp {
                         });
                         ui.end_row();
 
+                        ui.label(tr("blink_while_muted"));
+                        let changed = ui.add_enabled(!self.blink_on_talk, egui::Checkbox::new(&mut self.blink_while_muted, "")).changed();
+                        if changed && self.blink_while_muted { self.blink_on_talk = false; }
+                        ui.end_row();
+
                         // Blink-on-talk row
                         ui.label(tr("blink_on_talk")).on_hover_text(
                             tr("blink_tip"),
                         );
-                        ui.add_enabled(self.indicator_mode != "numbers_blink", egui::Checkbox::new(&mut self.blink_on_talk, ""));
+                        let changed = ui.add_enabled(!self.blink_while_muted, egui::Checkbox::new(&mut self.blink_on_talk, "")).changed();
+                        if changed && self.blink_on_talk { self.blink_while_muted = false; }
                         ui.end_row();
 
-                        if self.blink_on_talk && self.indicator_mode != "numbers_blink" {
+                        if self.blink_on_talk && !self.blink_while_muted {
                             ui.label(tr("sensitivity")).on_hover_text(
                                 "How loud you need to be for the blink to trigger",
                             );
@@ -1000,7 +1015,7 @@ impl eframe::App for SettingsApp {
                 section_frame(ui, tr("about"), |ui| {
                             let version = env!("CARGO_PKG_VERSION");
                             ui.label(
-                                egui::RichText::new(format!("FocusMute v{version}"))
+                                egui::RichText::new(format!("FocusMute {version}"))
                                     .strong()
                                     .size(15.0),
                             );
@@ -1133,6 +1148,7 @@ pub(crate) struct ValidateParams<'a> {
     pub browser_sync_port: &'a str,
     pub browser_sync_reverse: bool,
     pub blink_on_talk: bool,
+    pub blink_while_muted: bool,
     pub talk_threshold: u32,
     pub original: &'a Config,
     pub max_sound_bytes: u64,
@@ -1173,6 +1189,7 @@ pub(crate) fn build_and_validate_config(p: &ValidateParams<'_>) -> Result<Config
             mute_inputs,
             input_colors: p.original.indicator.input_colors.clone(),
             blink_on_talk: p.blink_on_talk,
+            blink_while_muted: p.blink_while_muted,
             talk_threshold: p.talk_threshold,
             mode: p.indicator_mode.to_string(),
         },
@@ -1357,6 +1374,7 @@ mod tests {
             direct_button_enabled: false,
             browser_sync_reverse: false,
             blink_on_talk: false,
+            blink_while_muted: false,
             talk_threshold: 250,
             sound_enabled: true,
             suppress_browser_sync_sound: true,

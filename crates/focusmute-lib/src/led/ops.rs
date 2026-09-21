@@ -147,6 +147,7 @@ pub fn apply_mute_indicator_with_mode(
     mode: IndicatorRenderMode,
 ) -> Result<()> {
     match mode {
+        IndicatorRenderMode::Extended => apply_extended_indicator(device, strategy, mute_color),
         IndicatorRenderMode::HalosSolid => {
             if is_solo(device) {
                 log::warn!(
@@ -163,6 +164,65 @@ pub fn apply_mute_indicator_with_mode(
     }
 }
 
+/// Extended indication owns both input number LEDs and both Output indicators.
+fn apply_extended_indicator(
+    device: &impl ScarlettDevice,
+    strategy: &MuteStrategy,
+    color: u32,
+) -> Result<()> {
+    if is_solo(device) {
+        return [super::solo::INPUT_1_LED, super::solo::INPUT_2_LED, 24, 25]
+            .into_iter()
+            .try_for_each(|index| set_single_led(device, index, color));
+    }
+    if device
+        .info()
+        .model()
+        .eq_ignore_ascii_case("Scarlett 2i2 4th Gen")
+    {
+        return [0, 8, 37, 38]
+            .into_iter()
+            .try_for_each(|index| set_single_led(device, index, color));
+    }
+    strategy
+        .number_leds
+        .iter()
+        .try_for_each(|&index| set_single_led(device, index, color))
+}
+
+fn clear_extended_indicator(device: &impl ScarlettDevice, strategy: &MuteStrategy) -> Result<()> {
+    if is_solo(device) {
+        return [super::solo::INPUT_1_LED, super::solo::INPUT_2_LED, 24, 25]
+            .into_iter()
+            .try_for_each(|index| set_single_led(device, index, super::solo::WHITE));
+    }
+    if device
+        .info()
+        .model()
+        .eq_ignore_ascii_case("Scarlett 2i2 4th Gen")
+    {
+        let selected = device
+            .get_descriptor(protocol::OFF_SELECTED_INPUT, 1)?
+            .first()
+            .copied()
+            .unwrap_or(0) as usize;
+        for (input, led) in [(0, 0), (1, 8)] {
+            set_single_led(
+                device,
+                led,
+                if input == selected {
+                    strategy.selected_color
+                } else {
+                    strategy.unselected_color
+                },
+            )?;
+        }
+        return [37, 38]
+            .into_iter()
+            .try_for_each(|index| set_single_led(device, index, 0x7080_8800));
+    }
+    clear_mute_indicator(device, strategy)
+}
 /// Clear the mute indicator and restore normal LED state.
 pub fn clear_mute_indicator(device: &impl ScarlettDevice, strategy: &MuteStrategy) -> Result<()> {
     restore_number_leds(device, strategy)
@@ -173,7 +233,9 @@ pub fn clear_mute_indicator_with_mode(
     strategy: &MuteStrategy,
     mode: IndicatorRenderMode,
 ) -> Result<()> {
-    let _ = mode;
+    if mode == IndicatorRenderMode::Extended {
+        return clear_extended_indicator(device, strategy);
+    }
     clear_mute_indicator(device, strategy)
 }
 
