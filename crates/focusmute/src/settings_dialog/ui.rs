@@ -10,6 +10,8 @@ use focusmute_lib::device::{PlatformDevice, ScarlettDevice, open_device_by_seria
 use focusmute_lib::led;
 use focusmute_lib::meter;
 use global_hotkey::{GlobalHotKeyEvent, HotKeyState, hotkey::HotKey};
+#[cfg(windows)]
+use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 
 use super::{
     MAX_SOUND_FILE_BYTES, SettingsToggleCallback, SoundPreviewPlayer, combo_to_mute_inputs,
@@ -130,55 +132,110 @@ pub struct SettingsApp {
     needs_resize: bool,
 }
 
+#[cfg(windows)]
+fn capture_pressed_hotkey(_ctx: &egui::Context) -> Option<Option<String>> {
+    const VK_SHIFT: i32 = 0x10;
+    const VK_CONTROL: i32 = 0x11;
+    const VK_MENU: i32 = 0x12;
+    const VK_LWIN: i32 = 0x5B;
+    const VK_RWIN: i32 = 0x5C;
+    let down = |key| unsafe { GetAsyncKeyState(key) as u16 & 0x8000 != 0 };
+    let pressed = |key| unsafe { GetAsyncKeyState(key) as u16 & 1 != 0 };
+    let key_name = |key: i32| match key {
+        0x13 => Some("Pause".to_owned()),
+        0x20 => Some("Space".to_owned()),
+        0x21 => Some("PageDown".to_owned()),
+        0x22 => Some("PageUp".to_owned()),
+        0x23 => Some("End".to_owned()),
+        0x24 => Some("Home".to_owned()),
+        0x25 => Some("Left".to_owned()),
+        0x26 => Some("Up".to_owned()),
+        0x27 => Some("Right".to_owned()),
+        0x28 => Some("Down".to_owned()),
+        0x2D => Some("Insert".to_owned()),
+        0x2E => Some("Delete".to_owned()),
+        0x70..=0x87 => Some(format!("F{}", key - 0x6F)),
+        0x30..=0x39 | 0x41..=0x5A => char::from_u32(key as u32).map(|c| c.to_string()),
+        _ => None,
+    };
+    for key in 0x08..=0xFE {
+        if matches!(key, VK_SHIFT | VK_CONTROL | VK_MENU | VK_LWIN | VK_RWIN) || !pressed(key) {
+            continue;
+        }
+        let Some(key) = key_name(key) else { continue };
+        let mut parts = Vec::new();
+        if down(VK_CONTROL) {
+            parts.push("Ctrl");
+        }
+        if down(VK_MENU) {
+            parts.push("Alt");
+        }
+        if down(VK_SHIFT) {
+            parts.push("Shift");
+        }
+        if down(VK_LWIN) || down(VK_RWIN) {
+            parts.push("Super");
+        }
+        parts.push(&key);
+        return Some(Some(parts.join("+")));
+    }
+    None
+}
+
+#[cfg(not(windows))]
+fn capture_pressed_hotkey(ctx: &egui::Context) -> Option<Option<String>> {
+    ctx.input(|input| {
+        input.events.iter().find_map(|event| match event {
+            egui::Event::Key {
+                key,
+                pressed: true,
+                repeat: false,
+                modifiers,
+                ..
+            } => {
+                let raw = format!("{key:?}");
+                if matches!(
+                    raw.as_str(),
+                    "ShiftLeft"
+                        | "ShiftRight"
+                        | "ControlLeft"
+                        | "ControlRight"
+                        | "AltLeft"
+                        | "AltRight"
+                        | "SuperLeft"
+                        | "SuperRight"
+                ) {
+                    return None;
+                }
+                if raw == "Escape" {
+                    return Some(None);
+                }
+                let mut parts = Vec::new();
+                if modifiers.ctrl || modifiers.command {
+                    parts.push("Ctrl");
+                }
+                if modifiers.alt {
+                    parts.push("Alt");
+                }
+                if modifiers.shift {
+                    parts.push("Shift");
+                }
+                parts.push(&raw);
+                Some(Some(parts.join("+")))
+            }
+            _ => None,
+        })
+    })
+}
 impl SettingsApp {
-    /// Capture the next non-modifier key press in the dialog and convert it
-    /// to the same portable spelling accepted by `global-hotkey`.
+    /// Capture a shortcut using the native key state on Windows. egui exposes
+    /// only a limited logical-key set (notably it omits Pause), while the
+    /// hotkey parser accepts Win32 virtual keys.
     fn capture_hotkey(&mut self, ctx: &egui::Context) {
         let Some(target) = self.capturing else {
             return;
         };
-        let captured = ctx.input(|input| {
-            input.events.iter().find_map(|event| match event {
-                egui::Event::Key {
-                    key,
-                    pressed: true,
-                    repeat: false,
-                    modifiers,
-                    ..
-                } => {
-                    let raw = format!("{key:?}");
-                    if matches!(
-                        raw.as_str(),
-                        "Shift" | "Ctrl" | "Alt" | "Command" | "MacCommand"
-                    ) {
-                        return None;
-                    }
-                    if raw == "Escape" {
-                        return Some(None);
-                    }
-                    let key_name = match raw.as_str() {
-                        "ArrowUp" => "Up".to_string(),
-                        "ArrowDown" => "Down".to_string(),
-                        "ArrowLeft" => "Left".to_string(),
-                        "ArrowRight" => "Right".to_string(),
-                        _ => raw,
-                    };
-                    let mut parts = Vec::new();
-                    if modifiers.ctrl || modifiers.command {
-                        parts.push("Ctrl");
-                    }
-                    if modifiers.alt {
-                        parts.push("Alt");
-                    }
-                    if modifiers.shift {
-                        parts.push("Shift");
-                    }
-                    parts.push(&key_name);
-                    Some(Some(parts.join("+")))
-                }
-                _ => None,
-            })
-        });
+        let captured = capture_pressed_hotkey(ctx);
         if let Some(value) = captured {
             if let Some(value) = value {
                 match target {
@@ -189,7 +246,6 @@ impl SettingsApp {
             self.capturing = None;
         }
     }
-
     fn forward_registered_toggle_hotkey(&self) {
         let Some(toggle_id) = self.registered_toggle_id else {
             return;
@@ -720,7 +776,7 @@ impl eframe::App for SettingsApp {
 
             // ── Keyboard section ──
             section_frame(ui, tr("keyboard"), |ui| {
-                let text_width = (ui.available_width() - 80.0 - 12.0).max(100.0);
+                let text_width = (ui.available_width() - 128.0).max(120.0);
                 egui::Grid::new("hotkey_grid")
                     .num_columns(2)
                     .min_col_width(80.0)
@@ -760,6 +816,9 @@ impl eframe::App for SettingsApp {
                 ui.checkbox(&mut self.sound_enabled, tr("sound_feedback"));
                 ui.add_space(4.0);
 
+                // Keep controls inside the second grid column; Grid measures child desired sizes.
+                let sound_control_width = (ui.available_width() - 128.0).max(120.0);
+
                 // Reserve for the longer of the localized Browse and Play labels.
                 let action_text_width = ui.fonts_mut(|f| {
                     [tr("browse"), tr("play")]
@@ -795,7 +854,7 @@ impl eframe::App for SettingsApp {
                             }
                             ui.add(
                                 egui::TextEdit::singleline(&mut self.mute_sound_path)
-                                    .desired_width(ui.available_width())
+                                    .desired_width((sound_control_width - browse_btn_width - 8.0).max(80.0))
                                     .hint_text(tr("built_in")),
                             );
                         });
@@ -804,6 +863,7 @@ impl eframe::App for SettingsApp {
                         volume_row(
                             ui,
                             browse_btn_width,
+                            sound_control_width,
                             &language,
                             &mut self.mute_sound_volume,
                             &self.mute_sound_path,
@@ -823,7 +883,7 @@ impl eframe::App for SettingsApp {
                             }
                             ui.add(
                                 egui::TextEdit::singleline(&mut self.unmute_sound_path)
-                                    .desired_width(ui.available_width())
+                                    .desired_width((sound_control_width - browse_btn_width - 8.0).max(80.0))
                                     .hint_text(tr("built_in")),
                             );
                         });
@@ -832,6 +892,7 @@ impl eframe::App for SettingsApp {
                         volume_row(
                             ui,
                             browse_btn_width,
+                            sound_control_width,
                             &language,
                             &mut self.unmute_sound_volume,
                             &self.unmute_sound_path,
@@ -1281,6 +1342,7 @@ pub(crate) fn build_and_validate_config(p: &ValidateParams<'_>) -> Result<Config
 fn volume_row(
     ui: &mut egui::Ui,
     browse_btn_width: f32,
+    control_width: f32,
     language: &str,
     volume: &mut f32,
     sound_path: &str,
@@ -1306,10 +1368,15 @@ fn volume_row(
         {
             *volume = (pct / 100.0).clamp(0.0, 1.0);
         }
-        let saved = ui.spacing().slider_width;
-        ui.spacing_mut().slider_width = ui.available_width();
-        ui.add(egui::Slider::new(volume, 0.0..=1.0).show_value(false));
-        ui.spacing_mut().slider_width = saved;
+        // The grid gives this row an unconstrained child Ui while measuring.
+        // An explicit width prevents the slider from pushing Play off-screen.
+        ui.add_sized(
+            [
+                (control_width - browse_btn_width - 64.0).max(48.0),
+                ui.spacing().interact_size.y,
+            ],
+            egui::Slider::new(volume, 0.0..=1.0).show_value(false),
+        );
     });
     ui.end_row();
 }
