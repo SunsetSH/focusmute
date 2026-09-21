@@ -1,4 +1,4 @@
-# Protocol Reference — Scarlett 2i2 4th Gen
+﻿# Protocol Reference — Scarlett 2i2 4th Gen
 
 ## Summary
 
@@ -575,10 +575,10 @@ Prop3=19,11
 The App_Env segment stores plain-text key=value pairs (newline-separated). Only ~165 bytes used of the 64 KB allocation; the rest is empty flash.
 
 ```
-serial_str=S2G6HVK563186A
-pcba_sn=Y250530057501
-powercycles=0x0000003f
-totalsec=0x000c5470
+serial_str=<redacted>
+pcba_sn=<redacted>
+powercycles=<redacted>
+totalsec=<redacted>
 url_str=api.focusrite-novation.com/register?method=usb&upn=00000000000000
 ```
 
