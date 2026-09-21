@@ -197,7 +197,7 @@ fn clear_extended_indicator(device: &impl ScarlettDevice, strategy: &MuteStrateg
         }
         return [24, 25]
             .into_iter()
-            .try_for_each(|index| set_single_led(device, index, super::solo::OUTPUT_WHITE));
+            .try_for_each(|index| set_single_led(device, index, super::solo::WHITE));
     }
     if device
         .info()

@@ -6,8 +6,6 @@ pub const INPUT_1_LED: u8 = 4;
 pub const INPUT_2_LED: u8 = 12;
 /// Number-indicator white tuned on Scarlett 2i2 and used for Solo restoration.
 pub const WHITE: u32 = 0xAAFF_DD00;
-/// Output-indicator white used by the Scarlett 2i2 firmware.
-pub const OUTPUT_WHITE: u32 = 0x7080_8800;
 
 /// Return the confirmed number LEDs for the configured zero-based input set.
 /// Unknown inputs are ignored so a malformed config cannot light a panel LED.
