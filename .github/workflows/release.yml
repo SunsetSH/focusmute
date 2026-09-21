@@ -1,0 +1,146 @@
+name: Release
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+*']
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  # The artifact names and the version the binaries report both come from
+  # Cargo.toml, not from the tag, so a forgotten version bump publishes a
+  # release whose assets disagree with it while every other gate stays green.
+  version-check:
+    name: Tag matches crate version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compare tag against both crate versions
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          status=0
+          for manifest in crates/focusmute/Cargo.toml crates/focusmute-lib/Cargo.toml; do
+            crate=$(grep -m1 '^version = ' "$manifest" | cut -d'"' -f2)
+            echo "$manifest: $crate (tag: $tag)"
+            if [ "$crate" != "$tag" ]; then
+              echo "::error file=$manifest::version $crate does not match tag $GITHUB_REF_NAME"
+              status=1
+            fi
+          done
+          exit $status
+
+  check:
+    needs: [version-check]
+    uses: ./.github/workflows/check.yml
+
+  release-windows:
+    name: Build & Release (Windows)
+    needs: [check]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: windows
+
+      - name: Build release binaries
+        run: cargo build --release
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@b874e25ea559687bec77e281e9b271aa1367b624 # v1.23.0
+
+      - name: Install cargo-wix
+        run: cargo binstall cargo-wix --no-confirm
+
+      - name: Build MSI installer
+        run: cargo wix -p focusmute --no-build --nocapture
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-release
+          path: |
+            target/release/focusmute.exe
+            target/release/focusmute-cli.exe
+            target/wix/*.msi
+
+  release-linux:
+    name: Build & Release (Linux)
+    needs: [check]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: linux
+
+      - name: Install Linux dependencies
+        uses: awalsh128/cache-apt-pkgs-action@553a35bb8ebd9fcabcb1c9451aa4c98e1b4ca8a9 # v1.6.3
+        with:
+          packages: libpulse-dev pkg-config libasound2-dev libgtk-3-dev libxdo-dev libappindicator3-dev libxkbcommon-dev libegl-dev libssl-dev
+
+      - name: Build release binaries
+        run: cargo build --release
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@b874e25ea559687bec77e281e9b271aa1367b624 # v1.23.0
+
+      - name: Install cargo-deb
+        run: cargo binstall cargo-deb --no-confirm
+
+      - name: Build .deb package
+        run: cargo deb -p focusmute --no-build
+
+      - name: Create tar.gz archive
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ARCHIVE="focusmute-${VERSION}-linux-x86_64"
+          mkdir -p "${ARCHIVE}"
+          cp target/release/focusmute "${ARCHIVE}/"
+          cp target/release/focusmute-cli "${ARCHIVE}/"
+          cp dist/linux/99-focusrite.rules "${ARCHIVE}/"
+          cp dist/linux/focusmute.desktop "${ARCHIVE}/"
+          cp dist/linux/focusmute-cli.desktop "${ARCHIVE}/"
+          cp dist/linux/README-linux.md "${ARCHIVE}/README.md"
+          cp LICENSE "${ARCHIVE}/"
+          tar czf "${ARCHIVE}.tar.gz" "${ARCHIVE}"
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-release
+          path: |
+            target/debian/*.deb
+            focusmute-*-linux-x86_64.tar.gz
+
+  publish:
+    name: Create GitHub Release
+    needs: [release-windows, release-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v2
+        with:
+          files: |
+            artifacts/windows-release/**/*.exe
+            artifacts/windows-release/**/*.msi
+            artifacts/linux-release/**/*.deb
+            artifacts/linux-release/*.tar.gz
+          generate_release_notes: true

@@ -1,0 +1,89 @@
+[package]
+name = "focusmute"
+version = "0.11.0"
+edition = "2024"
+description = "Hotkey mute control for Focusrite Scarlett interfaces"
+authors = ["Martin Simon"]
+license = "Apache-2.0"
+repository = "https://github.com/SunsetSH/focusmute"
+homepage = "https://github.com/SunsetSH/focusmute"
+rust-version = "1.95"
+
+[[bin]]
+name = "focusmute"
+path = "src/main.rs"
+
+[[bin]]
+name = "focusmute-cli"
+path = "src/main_cli.rs"
+
+[dependencies]
+focusmute-lib = { path = "../focusmute-lib" }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0.149"
+log = "0.4"
+flexi_logger = { version = "0.31", default-features = false }
+
+[target.'cfg(not(windows))'.dependencies]
+ctrlc = "3"
+
+# Tray app dependencies — shared across Windows and Linux
+[target.'cfg(any(windows, target_os = "linux"))'.dependencies]
+tray-icon = "0.24"
+muda = "0.19"
+global-hotkey = "0.8"
+image = { version = "0.25", default-features = false, features = ["png", "ico"] }
+rodio = { version = "0.22", default-features = false, features = ["wav", "playback"] }
+auto-launch = "0.6"
+eframe = { version = "0.36", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+rfd = "0.17"
+single-instance = "0.3"
+
+# Linux-only dependencies
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+notify-rust = "4"
+
+# Windows-only dependencies
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"
+windows = { version = "0.62", features = [
+    "Win32_System_Console",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+    "Win32_Foundation",
+    "Data_Xml_Dom",
+    "UI_Notifications",
+] }
+
+[build-dependencies]
+winresource = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+assert_cmd = "2"
+predicates = "3"
+
+# cargo-wix auto-detects WixUI_FeatureTree → WixUIExtension, but does
+# not auto-detect arbitrary extensions like WixUtilExtension. We use
+# util:CloseApplication in main.wxs (so MSI's Restart Manager isn't
+# hung up by the tray app's missing message pump during upgrade /
+# uninstall) — declare it here so candle and light both link the
+# extension during the cargo-wix run.
+[package.metadata.deb]
+name = "focusmute"
+maintainer = "Martin Simon"
+depends = "$auto, libpulse0, libgtk-3-0, libappindicator3-1, libegl1"
+section = "sound"
+priority = "optional"
+assets = [
+    ["target/release/focusmute", "usr/bin/", "755"],
+    ["target/release/focusmute-cli", "usr/bin/", "755"],
+    ["../../dist/linux/99-focusrite.rules", "etc/udev/rules.d/", "644"],
+    ["../../dist/linux/focusmute.desktop", "usr/share/applications/", "644"],
+    ["../../dist/linux/focusmute-cli.desktop", "usr/share/applications/", "644"],
+    ["../../LICENSE", "usr/share/doc/focusmute/", "644"],
+]
+maintainer-scripts = "../../dist/linux/debian/"

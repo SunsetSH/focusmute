@@ -1,0 +1,158 @@
+<?xml version='1.0' encoding='windows-1252'?>
+<?if $(sys.BUILDARCH) = x64 or $(sys.BUILDARCH) = arm64 ?>
+    <?define PlatformProgramFilesFolder = "ProgramFiles64Folder" ?>
+<?else ?>
+    <?define PlatformProgramFilesFolder = "ProgramFilesFolder" ?>
+<?endif ?>
+
+<Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'
+     xmlns:util='http://schemas.microsoft.com/wix/UtilExtension'>
+
+    <Product
+        Id='*'
+        Name='FocusMute'
+        UpgradeCode='7EF4FD9F-060A-4CD0-B76D-5821DA45C11B'
+        Manufacturer='Martin Simon'
+        Language='1033'
+        Codepage='1252'
+        Version='$(var.Version)'>
+
+        <Package Id='*'
+            Keywords='Installer'
+            Description='FocusMute — Scarlett 4th Gen LED mute indicator'
+            Manufacturer='Martin Simon'
+            InstallerVersion='450'
+            Languages='1033'
+            Compressed='yes'
+            InstallScope='perMachine'
+            SummaryCodepage='1252' />
+
+        <MajorUpgrade
+            Schedule='afterInstallInitialize'
+            AllowSameVersionUpgrades='yes'
+            DowngradeErrorMessage='A newer version of [ProductName] is already installed. Setup will now exit.' />
+
+        <Media Id='1' Cabinet='media1.cab' EmbedCab='yes' DiskPrompt='CD-ROM #1' />
+        <Property Id='DiskPrompt' Value='FocusMute Installation' />
+
+        <Directory Id='TARGETDIR' Name='SourceDir'>
+            <Directory Id='$(var.PlatformProgramFilesFolder)' Name='PFiles'>
+                <Directory Id='APPLICATIONFOLDER' Name='Focusmute'>
+
+                    <Component Id='FocusmuteExe' Guid='*'>
+                        <File
+                            Id='FocusmuteExeFile'
+                            Name='focusmute.exe'
+                            DiskId='1'
+                            Source='$(var.CargoTargetBinDir)\focusmute.exe'
+                            KeyPath='yes' />
+                    </Component>
+
+                    <Component Id='FocusmuteCli' Guid='*'>
+                        <File
+                            Id='FocusmuteCliFile'
+                            Name='focusmute-cli.exe'
+                            DiskId='1'
+                            Source='$(var.CargoTargetBinDir)\focusmute-cli.exe'
+                            KeyPath='yes' />
+                    </Component>
+
+                    <Component Id='PathEntry' Guid='5A6AF08E-C824-422D-BBB2-1E25FC0EF8D5' KeyPath='yes'>
+                        <Environment
+                            Id='PATH'
+                            Name='PATH'
+                            Value='[APPLICATIONFOLDER]'
+                            Permanent='no'
+                            Part='last'
+                            Action='set'
+                            System='yes' />
+                    </Component>
+
+                </Directory>
+            </Directory>
+
+            <Directory Id='ProgramMenuFolder' Name='Programs'>
+                <Directory Id='ApplicationProgramsFolder' Name='Focusmute'>
+                    <Component Id='StartMenuShortcut' Guid='*'>
+                        <Shortcut
+                            Id='FocusmuteShortcut'
+                            Name='FocusMute'
+                            Description='Scarlett 4th Gen LED mute indicator'
+                            Target='[APPLICATIONFOLDER]focusmute.exe'
+                            WorkingDirectory='APPLICATIONFOLDER'
+                            Icon='ProductIcon' />
+                        <RemoveFolder Id='CleanUpShortcutFolder' On='uninstall' />
+                        <RegistryValue
+                            Root='HKCU'
+                            Key='Software\Focusmute'
+                            Name='installed'
+                            Type='integer'
+                            Value='1'
+                            KeyPath='yes' />
+                    </Component>
+                </Directory>
+            </Directory>
+        </Directory>
+
+        <Feature Id='MainFeature' Title='FocusMute' Description='Install FocusMute tray app and CLI.'
+            Level='1' ConfigurableDirectory='APPLICATIONFOLDER'
+            AllowAdvertise='no' Display='expand' Absent='disallow'>
+
+            <ComponentRef Id='FocusmuteExe' />
+            <ComponentRef Id='FocusmuteCli' />
+            <ComponentRef Id='StartMenuShortcut' />
+
+            <Feature Id='PathFeature' Title='PATH Environment Variable'
+                Description='Add install location to the PATH system environment variable.'
+                Level='1' Absent='allow'>
+                <ComponentRef Id='PathEntry' />
+            </Feature>
+
+        </Feature>
+
+        <SetProperty Id='ARPINSTALLLOCATION' Value='[APPLICATIONFOLDER]' After='CostFinalize' />
+        <Property Id='ARPHELPLINK' Value='https://github.com/SunsetSH/focusmute' />
+
+        <!-- Restart Manager handling.
+             ============================================================
+             FocusMute is a tray-only daemon: no top-level window, no
+             console in release builds. When MSI's Restart Manager
+             tries to ask the running process to shut down so its files
+             can be replaced (upgrade or uninstall), it has nowhere to
+             send the WM_QUERYENDSESSION/WM_CLOSE message — RM hangs for
+             ~30 s, then surfaces "The setup was unable to automatically
+             close all requested applications."
+
+             `util:CloseApplication` runs custom actions early in the
+             install sequence to send the close messages itself. With
+             `TerminateProcess='5'`, if the process doesn't exit within
+             5 seconds (likely, since the tray app has no message pump
+             for these), MSI calls `TerminateProcess()` directly.
+             Brutal, but the daemon is stateless across restarts (state
+             lives on the Scarlett's firmware) so terminate-then-restart
+             is the right move.
+
+             focusmute-cli is a one-shot CLI that's never running long
+             enough to matter, so no entry for it.
+        -->
+        <util:CloseApplication
+            Id='CloseFocusmute'
+            Target='focusmute.exe'
+            CloseMessage='yes'
+            EndSessionMessage='yes'
+            TerminateProcess='5'
+            RebootPrompt='no'
+            Description='Stopping FocusMute tray app...' />
+
+        <Icon Id='ProductIcon' SourceFile='crates\focusmute\wix\icon.ico' />
+        <Property Id='ARPPRODUCTICON' Value='ProductIcon' />
+
+        <UI>
+            <UIRef Id='WixUI_FeatureTree' />
+        </UI>
+        <WixVariable Id='WixUILicenseRtf' Value='crates\focusmute\wix\License.rtf' />
+        <WixVariable Id='WixUIBannerBmp' Value='crates\focusmute\wix\banner.bmp' />
+        <WixVariable Id='WixUIDialogBmp' Value='crates\focusmute\wix\dialog.bmp' />
+
+    </Product>
+</Wix>
