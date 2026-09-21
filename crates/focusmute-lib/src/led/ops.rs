@@ -192,9 +192,12 @@ fn apply_extended_indicator(
 
 fn clear_extended_indicator(device: &impl ScarlettDevice, strategy: &MuteStrategy) -> Result<()> {
     if is_solo(device) {
-        return [super::solo::INPUT_1_LED, super::solo::INPUT_2_LED, 24, 25]
+        for index in [super::solo::INPUT_1_LED, super::solo::INPUT_2_LED] {
+            set_single_led(device, index, super::solo::WHITE)?;
+        }
+        return [24, 25]
             .into_iter()
-            .try_for_each(|index| set_single_led(device, index, super::solo::WHITE));
+            .try_for_each(|index| set_single_led(device, index, super::solo::OUTPUT_WHITE));
     }
     if device
         .info()
@@ -370,7 +373,7 @@ mod tests {
         let descriptors = dev.descriptors.borrow();
         assert_eq!(
             descriptors.get(&80),
-            Some(&0xFFFF_FF00u32.to_le_bytes().to_vec())
+            Some(&crate::led::solo::WHITE.to_le_bytes().to_vec())
         );
         assert_eq!(descriptors.get(&84), Some(&vec![4]));
         drop(descriptors);
