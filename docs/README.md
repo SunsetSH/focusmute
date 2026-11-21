@@ -110,6 +110,8 @@ Focusrite Control 2 is a native desktop application for controlling Focusrite au
 - [17-windows-solo-compatibility-review.ru.md](17-windows-solo-compatibility-review.ru.md) - Совместимость Windows и Scarlett Solo 4th Gen
 - [18-solo-mute-technical-plan.ru.md](18-solo-mute-technical-plan.ru.md) - Технический план доработки Solo
 - [19-build-and-solo-guide.ru.md](19-build-and-solo-guide.ru.md) - Сборка и настройка реализованной поддержки Solo
+- [21-solo-led-map-and-restoration.ru.md](21-solo-led-map-and-restoration.ru.md) - Карта LED Solo и безопасное восстановление
+- [22-upstream-comparison-and-code-review.ru.md](22-upstream-comparison-and-code-review.ru.md) - Сравнение с upstream 0.12.1, код-ревью, звуковые пресеты
 
 ## USB Capture Analysis
 

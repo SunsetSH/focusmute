@@ -7,7 +7,7 @@ use std::sync::mpsc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use focusmute_lib::audio::{self, MuteMonitor, WasapiMonitor};
+use focusmute_lib::audio::{self, WasapiMonitor};
 
 use windows::Win32::Foundation::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -175,15 +175,7 @@ impl PlatformAdapter for WindowsAdapter {
                 log::error!("[audio] COM init error: {e}");
                 return;
             }
-
-            while RUNNING.load(Ordering::SeqCst) {
-                monitor.wait_for_change(Duration::from_millis(250));
-                monitor.refresh();
-                let muted = monitor.is_muted();
-                if tx.send(Msg::MutePoll(muted)).is_err() {
-                    break;
-                }
-            }
+            shared::run_poll_loop(&*monitor, &tx);
         })
     }
 
@@ -191,9 +183,9 @@ impl PlatformAdapter for WindowsAdapter {
         pump_messages();
     }
 
-    fn wait_for_events() {
+    fn wait_for_events(timeout: Duration) {
         unsafe {
-            MsgWaitForMultipleObjects(None, false, 50, QS_ALLINPUT);
+            MsgWaitForMultipleObjects(None, false, timeout.as_millis() as u32, QS_ALLINPUT);
         }
     }
 

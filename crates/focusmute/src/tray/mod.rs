@@ -4,6 +4,7 @@ mod blink;
 mod browser_sync;
 mod shared;
 pub(crate) mod state;
+mod wake;
 
 #[cfg(target_os = "linux")]
 mod linux;

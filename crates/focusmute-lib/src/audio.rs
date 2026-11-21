@@ -31,6 +31,10 @@ pub trait MuteMonitor {
     /// Refresh cached mute state from the underlying audio system.
     /// Default is a no-op; PulseAudio overrides to re-query state.
     fn refresh(&self) {}
+    /// Housekeeping on the thread that created the monitor, called on every
+    /// event-loop pass. Must be cheap when there is nothing to do. WASAPI
+    /// uses it to follow a change of the default microphone.
+    fn maintain(&self) {}
 }
 
 /// Wait on a `(Mutex<bool>, Condvar)` signal pair with a timeout.
@@ -106,38 +110,76 @@ mod wasapi {
         }
     }
 
-    pub struct WasapiMonitor {
-        volume: IAudioEndpointVolume,
-        device_name: Option<String>,
-        /// Cached mute state, updated by COM callback.
-        muted: Arc<AtomicBool>,
-        /// Signaled by COM callback when mute state changes.
+    /// COM callback that flags a change of the default capture device.
+    ///
+    /// Runs on a system thread, so it only sets a flag and wakes the poll
+    /// thread; the re-bind itself happens in [`WasapiMonitor::maintain`] on the
+    /// thread that owns the COM objects.
+    #[implement(IMMNotificationClient)]
+    struct DefaultDeviceClient {
+        changed: Arc<AtomicBool>,
         signal: Arc<(Mutex<bool>, Condvar)>,
-        /// Must keep callback alive for the lifetime of the registration.
-        _callback: IAudioEndpointVolumeCallback,
     }
 
-    // COM pointers are Send-safe with proper initialization per thread.
-    // The monitor is created and used on threads that call CoInitialize.
-    unsafe impl Send for WasapiMonitor {}
+    impl IMMNotificationClient_Impl for DefaultDeviceClient_Impl {
+        fn OnDeviceStateChanged(
+            &self,
+            _id: &windows::core::PCWSTR,
+            _state: DEVICE_STATE,
+        ) -> windows::core::Result<()> {
+            Ok(())
+        }
 
-    // SAFETY: The shared fields accessed from background threads — `muted`
-    // (AtomicBool) and `signal` (Mutex+Condvar) — are inherently Sync.
-    // The COM `volume` pointer is only used by `set_muted()`, which is
-    // called exclusively from the main thread. `Drop` (which also touches
-    // COM) runs on the main thread because `run_core` joins the background
-    // thread before dropping the monitor.
-    unsafe impl Sync for WasapiMonitor {}
+        fn OnDeviceAdded(&self, _id: &windows::core::PCWSTR) -> windows::core::Result<()> {
+            Ok(())
+        }
 
-    impl WasapiMonitor {
-        /// Create a new monitor for the default capture (microphone) device.
-        /// Caller must ensure COM is initialized on this thread.
-        pub fn new() -> Result<Self> {
+        fn OnDeviceRemoved(&self, _id: &windows::core::PCWSTR) -> windows::core::Result<()> {
+            Ok(())
+        }
+
+        fn OnDefaultDeviceChanged(
+            &self,
+            flow: EDataFlow,
+            role: ERole,
+            _id: &windows::core::PCWSTR,
+        ) -> windows::core::Result<()> {
+            if flow == eCapture && role == eConsole {
+                self.changed.store(true, Ordering::SeqCst);
+                if let Ok(mut changed) = self.signal.0.lock() {
+                    *changed = true;
+                    self.signal.1.notify_all();
+                }
+            }
+            Ok(())
+        }
+
+        fn OnPropertyValueChanged(
+            &self,
+            _id: &windows::core::PCWSTR,
+            _key: &windows::Win32::Foundation::PROPERTYKEY,
+        ) -> windows::core::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The default microphone's volume control and its mute callback.
+    struct Endpoint {
+        volume: IAudioEndpointVolume,
+        device_name: Option<String>,
+        /// Must keep callback alive for the lifetime of the registration.
+        callback: IAudioEndpointVolumeCallback,
+    }
+
+    impl Endpoint {
+        /// Bind to the current default capture device, publish its mute state
+        /// into `muted`, and register for its change notifications.
+        unsafe fn open_default(
+            enumerator: &IMMDeviceEnumerator,
+            muted: &Arc<AtomicBool>,
+            signal: &Arc<(Mutex<bool>, Condvar)>,
+        ) -> Result<Self> {
             unsafe {
-                let enumerator: IMMDeviceEnumerator =
-                    CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
-                        .map_err(|e| AudioError::InitFailed(format!("MMDeviceEnumerator: {e}")))?;
-
                 let device = enumerator
                     .GetDefaultAudioEndpoint(eCapture, eConsole)
                     .map_err(|e| AudioError::InitFailed(format!("GetDefaultAudioEndpoint: {e}")))?;
@@ -163,34 +205,97 @@ mod wasapi {
 
                 // Read initial mute state
                 let initial_muted = volume.GetMute().map(|b| b.as_bool()).unwrap_or(false);
-
-                let muted = Arc::new(AtomicBool::new(initial_muted));
-                let signal = Arc::new((Mutex::new(false), Condvar::new()));
+                muted.store(initial_muted, Ordering::SeqCst);
 
                 // Register COM callback for mute/volume change events
                 let callback: IAudioEndpointVolumeCallback = MuteCallback {
-                    muted: Arc::clone(&muted),
-                    signal: Arc::clone(&signal),
+                    muted: Arc::clone(muted),
+                    signal: Arc::clone(signal),
                 }
                 .into();
                 volume.RegisterControlChangeNotify(&callback).map_err(|e| {
                     AudioError::InitFailed(format!("RegisterControlChangeNotify: {e}"))
                 })?;
 
-                Ok(WasapiMonitor {
+                Ok(Endpoint {
                     volume,
                     device_name,
-                    muted,
-                    signal,
-                    _callback: callback,
+                    callback,
                 })
             }
         }
     }
 
+    impl Drop for Endpoint {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = self.volume.UnregisterControlChangeNotify(&self.callback);
+            }
+        }
+    }
+
+    pub struct WasapiMonitor {
+        enumerator: IMMDeviceEnumerator,
+        /// Replaced when the default microphone changes.
+        endpoint: Mutex<Endpoint>,
+        /// Cached mute state, updated by COM callback.
+        muted: Arc<AtomicBool>,
+        /// Signaled by COM callback when mute state changes.
+        signal: Arc<(Mutex<bool>, Condvar)>,
+        /// Set by [`DefaultDeviceClient`] when Windows picks another microphone.
+        default_changed: Arc<AtomicBool>,
+        device_client: IMMNotificationClient,
+    }
+
+    // COM pointers are Send-safe with proper initialization per thread.
+    // The monitor is created and used on threads that call CoInitialize.
+    unsafe impl Send for WasapiMonitor {}
+
+    // SAFETY: The shared fields accessed from background threads — `muted`,
+    // `default_changed` (AtomicBool) and `signal` (Mutex+Condvar) — are
+    // inherently Sync. The COM pointers are only used by `set_muted()` and
+    // `maintain()`, which are called exclusively from the main thread. `Drop`
+    // (which also touches COM) runs on the main thread because `run_core`
+    // joins the background thread before dropping the monitor.
+    unsafe impl Sync for WasapiMonitor {}
+
     impl WasapiMonitor {
-        pub fn device_name(&self) -> Option<&str> {
-            self.device_name.as_deref()
+        /// Create a new monitor for the default capture (microphone) device.
+        /// Caller must ensure COM is initialized on this thread.
+        pub fn new() -> Result<Self> {
+            unsafe {
+                let enumerator: IMMDeviceEnumerator =
+                    CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+                        .map_err(|e| AudioError::InitFailed(format!("MMDeviceEnumerator: {e}")))?;
+
+                let muted = Arc::new(AtomicBool::new(false));
+                let signal = Arc::new((Mutex::new(false), Condvar::new()));
+                let endpoint = Endpoint::open_default(&enumerator, &muted, &signal)?;
+
+                let default_changed = Arc::new(AtomicBool::new(false));
+                let device_client: IMMNotificationClient = DefaultDeviceClient {
+                    changed: Arc::clone(&default_changed),
+                    signal: Arc::clone(&signal),
+                }
+                .into();
+                // Not fatal: without it the monitor just stays on the first mic.
+                if let Err(e) = enumerator.RegisterEndpointNotificationCallback(&device_client) {
+                    log::warn!("[audio] default-device notifications unavailable: {e}");
+                }
+
+                Ok(WasapiMonitor {
+                    enumerator,
+                    endpoint: Mutex::new(endpoint),
+                    muted,
+                    signal,
+                    default_changed,
+                    device_client,
+                })
+            }
+        }
+
+        pub fn device_name(&self) -> Option<String> {
+            self.endpoint.lock().ok()?.device_name.clone()
         }
     }
 
@@ -200,8 +305,13 @@ mod wasapi {
         }
 
         fn set_muted(&self, muted: bool) -> Result<()> {
+            let endpoint = self
+                .endpoint
+                .lock()
+                .map_err(|e| AudioError::OperationFailed(format!("endpoint mutex: {e}")))?;
             unsafe {
-                self.volume
+                endpoint
+                    .volume
                     .SetMute(muted, std::ptr::null())
                     .map_err(|e| AudioError::OperationFailed(format!("SetMute: {e}")))
             }
@@ -210,12 +320,39 @@ mod wasapi {
         fn wait_for_change(&self, timeout: Duration) -> bool {
             super::wait_on_signal(&self.signal, timeout)
         }
+
+        fn maintain(&self) {
+            if !self.default_changed.swap(false, Ordering::SeqCst) {
+                return;
+            }
+            let Ok(mut endpoint) = self.endpoint.lock() else {
+                return;
+            };
+            match unsafe { Endpoint::open_default(&self.enumerator, &self.muted, &self.signal) } {
+                Ok(new_endpoint) => {
+                    log::info!(
+                        "[audio] default microphone changed: {}",
+                        new_endpoint.device_name.as_deref().unwrap_or("(unknown)")
+                    );
+                    // Dropping the old endpoint unregisters its callback.
+                    *endpoint = new_endpoint;
+                    // Wake the poll thread so the new mic's state is reported.
+                    if let Ok(mut changed) = self.signal.0.lock() {
+                        *changed = true;
+                        self.signal.1.notify_all();
+                    }
+                }
+                Err(e) => log::warn!("[audio] could not follow the new default microphone: {e}"),
+            }
+        }
     }
 
     impl Drop for WasapiMonitor {
         fn drop(&mut self) {
             unsafe {
-                let _ = self.volume.UnregisterControlChangeNotify(&self._callback);
+                let _ = self
+                    .enumerator
+                    .UnregisterEndpointNotificationCallback(&self.device_client);
             }
         }
     }

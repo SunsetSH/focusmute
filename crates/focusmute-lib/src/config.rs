@@ -104,6 +104,11 @@ pub struct SoundConfig {
     #[serde(default = "default_true")]
     pub sound_enabled: bool,
 
+    /// Built-in sound set used when a custom path is empty (see
+    /// [`VALID_SOUND_PRESETS`]). Unknown names fall back to the default.
+    #[serde(default = "default_sound_preset")]
+    pub sound_preset: String,
+
     /// Path to custom mute sound WAV file. Empty = use built-in.
     #[serde(default)]
     pub mute_sound_path: String,
@@ -130,6 +135,7 @@ impl Default for SoundConfig {
     fn default() -> Self {
         Self {
             sound_enabled: true,
+            sound_preset: default_sound_preset(),
             mute_sound_path: String::new(),
             unmute_sound_path: String::new(),
             mute_sound_volume: default_sound_volume(),
@@ -230,6 +236,27 @@ impl Default for HardwareButtonConfig {
     }
 }
 
+/// On-screen indicator shown briefly when the mute state changes (Windows).
+///
+/// Off by default. While off, no window, timer or thread exists for it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OsdConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Screen anchor, one of [`VALID_OSD_POSITIONS`].
+    #[serde(default = "default_osd_position")]
+    pub position: String,
+}
+
+impl Default for OsdConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            position: default_osd_position(),
+        }
+    }
+}
+
 // ── Default value helpers ──
 
 fn default_mute_color() -> String {
@@ -247,6 +274,12 @@ fn default_true() -> bool {
 }
 fn default_sound_volume() -> f32 {
     1.0
+}
+fn default_sound_preset() -> String {
+    "chip".into()
+}
+fn default_osd_position() -> String {
+    "bottom_center".into()
 }
 fn default_log_level() -> String {
     "info".into()
@@ -271,6 +304,17 @@ fn default_direct_double_click_ms() -> u64 {
 pub const VALID_LOG_LEVELS: &[&str] = &["error", "warn", "info", "debug", "trace"];
 pub const VALID_INDICATOR_MODES: &[&str] = &["auto", "numbers", "numbers_blink", "halos_solid"];
 pub const VALID_LANGUAGES: &[&str] = &["en", "ru"];
+/// Built-in mute/unmute sound sets. `classic` is the original WAV pair; the
+/// rest are synthesized at load time.
+/// On-screen indicator anchors on the primary monitor's work area.
+pub const VALID_OSD_POSITIONS: &[&str] = &[
+    "bottom_center",
+    "bottom_left",
+    "bottom_right",
+    "top_left",
+    "top_right",
+];
+pub const VALID_SOUND_PRESETS: &[&str] = &["chip", "blip", "arcade", "sweep", "pulse", "classic"];
 
 // ── Top-level config ──
 
@@ -294,6 +338,9 @@ pub struct Config {
 
     #[serde(default)]
     pub hardware_button: HardwareButtonConfig,
+
+    #[serde(default)]
+    pub osd: OsdConfig,
 }
 
 // ── Legacy flat config for migration ──
@@ -346,6 +393,7 @@ impl From<LegacyConfig> for Config {
             },
             sound: SoundConfig {
                 sound_enabled: legacy.sound_enabled,
+                sound_preset: default_sound_preset(),
                 mute_sound_path: legacy.mute_sound_path,
                 unmute_sound_path: legacy.unmute_sound_path,
                 mute_sound_volume: legacy.mute_sound_volume,
@@ -367,6 +415,7 @@ impl From<LegacyConfig> for Config {
                 ..Default::default()
             },
             hardware_button: HardwareButtonConfig::default(),
+            osd: OsdConfig::default(),
         }
     }
 }
@@ -1095,6 +1144,7 @@ on_unmute_command = "echo u"
                 ..Default::default()
             },
             hardware_button: HardwareButtonConfig::default(),
+            osd: OsdConfig::default(),
         };
         config.save_to(&path).unwrap();
 
@@ -1752,6 +1802,7 @@ on_unmute_command = "echo u"
                 ..Default::default()
             },
             hardware_button: HardwareButtonConfig::default(),
+            osd: OsdConfig::default(),
         };
         let toml_str = toml::to_string_pretty(&config).unwrap();
         let loaded: Config = toml::from_str(&toml_str).unwrap();

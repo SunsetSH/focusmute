@@ -57,10 +57,16 @@ pub struct TrayResources {
 
 impl TrayResources {
     pub fn init(config: &Config) -> focusmute_lib::error::Result<(Self, Vec<String>)> {
-        let (mute_sound, mute_warn) =
-            sound::load_sound_data(&config.sound.mute_sound_path, sound::SOUND_MUTED);
-        let (unmute_sound, unmute_warn) =
-            sound::load_sound_data(&config.sound.unmute_sound_path, sound::SOUND_UNMUTED);
+        let (mute_sound, mute_warn) = sound::load_sound_data(
+            &config.sound.mute_sound_path,
+            &config.sound.sound_preset,
+            sound::SoundEvent::Mute,
+        );
+        let (unmute_sound, unmute_warn) = sound::load_sound_data(
+            &config.sound.unmute_sound_path,
+            &config.sound.sound_preset,
+            sound::SoundEvent::Unmute,
+        );
         let (hotkey, hotkey_warnings) = register_hotkeys(
             &config.keyboard.hotkey,
             &config.keyboard.push_to_talk_hotkey,
@@ -84,6 +90,8 @@ impl TrayResources {
 pub enum Msg {
     MutePoll(bool),
     BrowserMute(bool),
+    /// Raw device notification packet from the Direct-button listener.
+    DirectNotify(Vec<u8>),
 }
 
 // ── Autostart ──
@@ -364,10 +372,11 @@ impl TrayState {
         new_config: Config,
         device: Option<&impl ScarlettDevice>,
     ) -> SettingsChanges {
+        let preset_changed = new_config.sound.sound_preset != self.config.sound.sound_preset;
         let mute_sound_changed =
-            new_config.sound.mute_sound_path != self.config.sound.mute_sound_path;
-        let unmute_sound_changed =
-            new_config.sound.unmute_sound_path != self.config.sound.unmute_sound_path;
+            preset_changed || new_config.sound.mute_sound_path != self.config.sound.mute_sound_path;
+        let unmute_sound_changed = preset_changed
+            || new_config.sound.unmute_sound_path != self.config.sound.unmute_sound_path;
         let toggle_changed = new_config.keyboard.hotkey != self.config.keyboard.hotkey;
         let new_toggle_str = new_config.keyboard.hotkey.clone();
         let ptt_changed =
@@ -439,14 +448,18 @@ pub fn handle_menu_event(
             }
 
             if changes.mute_sound_changed {
-                resources.mute_sound =
-                    sound::load_sound_data(&state.config.sound.mute_sound_path, sound::SOUND_MUTED)
-                        .0;
+                resources.mute_sound = sound::load_sound_data(
+                    &state.config.sound.mute_sound_path,
+                    &state.config.sound.sound_preset,
+                    sound::SoundEvent::Mute,
+                )
+                .0;
             }
             if changes.unmute_sound_changed {
                 resources.unmute_sound = sound::load_sound_data(
                     &state.config.sound.unmute_sound_path,
-                    sound::SOUND_UNMUTED,
+                    &state.config.sound.sound_preset,
+                    sound::SoundEvent::Unmute,
                 )
                 .0;
             }
