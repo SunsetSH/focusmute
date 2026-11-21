@@ -1,16 +1,14 @@
 //! Linux system tray — GTK event loop, PulseAudio monitoring.
 
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use focusmute_lib::audio::{MuteMonitor, PulseAudioMonitor};
+use focusmute_lib::audio::PulseAudioMonitor;
 
 use super::shared::{self, PlatformAdapter};
 use super::state::Msg;
-use crate::RUNNING;
 
 /// Detect if running under Wayland (global hotkeys may not work).
 fn is_wayland() -> bool {
@@ -59,15 +57,7 @@ impl PlatformAdapter for LinuxAdapter {
             // Allow PulseAudio to settle before starting the poll loop.
             // Without this, the first few readings may be stale.
             focusmute_lib::audio::stabilize_pulseaudio(&monitor);
-
-            while RUNNING.load(Ordering::SeqCst) {
-                monitor.wait_for_change(Duration::from_millis(250));
-                monitor.refresh();
-                let muted = monitor.is_muted();
-                if tx.send(Msg::MutePoll(muted)).is_err() {
-                    break;
-                }
-            }
+            shared::run_poll_loop(&*monitor, &tx);
         })
     }
 
@@ -77,7 +67,7 @@ impl PlatformAdapter for LinuxAdapter {
         }
     }
 
-    fn wait_for_events() {
+    fn wait_for_events(_timeout: Duration) {
         // Block until the next GTK event. The 50ms timer registered in
         // platform_init() guarantees we wake up frequently enough to
         // process non-GTK events (mute polls, menu, hotkeys).

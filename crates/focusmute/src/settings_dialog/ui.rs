@@ -70,6 +70,8 @@ pub struct SettingsApp {
     indicator_mode: String,
     language: String,
     direct_button_enabled: bool,
+    osd_enabled: bool,
+    osd_position: String,
     selected_tab: SettingsTab,
     is_solo: bool,
 
@@ -101,6 +103,7 @@ pub struct SettingsApp {
     notifications_enabled: bool,
     log_level: String,
 
+    sound_preset: String,
     mute_sound_path: String,
     unmute_sound_path: String,
 
@@ -326,6 +329,8 @@ impl SettingsApp {
             },
             language: config.system.language.clone(),
             direct_button_enabled: config.hardware_button.direct_button_enabled,
+            osd_enabled: config.osd.enabled,
+            osd_position: config.osd.position.clone(),
             selected_tab: SettingsTab::Main,
             is_solo,
 
@@ -355,6 +360,7 @@ impl SettingsApp {
             notifications_enabled: config.system.notifications_enabled,
             log_level: config.system.log_level.clone(),
 
+            sound_preset: config.sound.sound_preset.clone(),
             mute_sound_path: config.sound.mute_sound_path.clone(),
             unmute_sound_path: config.sound.unmute_sound_path.clone(),
 
@@ -391,6 +397,8 @@ impl SettingsApp {
             indicator_mode: &self.indicator_mode,
             language: &self.language,
             direct_button_enabled: self.direct_button_enabled,
+            osd_enabled: self.osd_enabled,
+            osd_position: &self.osd_position,
             sound_enabled: self.sound_enabled,
             suppress_browser_sync_sound: self.suppress_browser_sync_sound,
             mute_sound_volume: self.mute_sound_volume,
@@ -400,6 +408,7 @@ impl SettingsApp {
             log_level: &self.log_level,
             mute_inputs_index: self.mute_inputs_index,
             input_count: self.input_count,
+            sound_preset: &self.sound_preset,
             mute_sound_path: &self.mute_sound_path,
             unmute_sound_path: &self.unmute_sound_path,
             on_mute_url: &self.on_mute_url,
@@ -533,8 +542,8 @@ impl SettingsApp {
             let mut text = format!(
                 "READ ONLY: mode[72]={mode:02X?}; Air[62]={air:02X?}; Direct[264]={direct:02X?}\nCommand buffer (NOT measured panel colours), slots[88]:"
             );
-            for (index, raw) in values.chunks_exact(4).enumerate() {
-                let color = u32::from_le_bytes(raw.try_into().map_err(|_| "invalid slot data")?);
+            for (index, raw) in values.as_chunks::<4>().0.iter().enumerate() {
+                let color = u32::from_le_bytes(*raw);
                 write!(&mut text, " {index}={color:#010X}").map_err(|e| e.to_string())?;
             }
             Ok::<_, String>(text)
@@ -566,6 +575,8 @@ impl SettingsApp {
             indicator_mode: self.indicator_mode.clone(),
             language: self.language.clone(),
             direct_button_enabled: self.direct_button_enabled,
+            osd_enabled: self.osd_enabled,
+            osd_position: self.osd_position.clone(),
             mute_inputs_index: self.mute_inputs_index,
             sound_enabled: self.sound_enabled,
             suppress_browser_sync_sound: self.suppress_browser_sync_sound,
@@ -574,6 +585,7 @@ impl SettingsApp {
             autostart: self.autostart,
             notifications_enabled: self.notifications_enabled,
             log_level: self.log_level.clone(),
+            sound_preset: self.sound_preset.clone(),
             mute_sound_path: self.mute_sound_path.clone(),
             unmute_sound_path: self.unmute_sound_path.clone(),
             on_mute_url: self.on_mute_url.clone(),
@@ -599,6 +611,8 @@ struct FormSnapshot {
     indicator_mode: String,
     language: String,
     direct_button_enabled: bool,
+    osd_enabled: bool,
+    osd_position: String,
     mute_inputs_index: usize,
     sound_enabled: bool,
     suppress_browser_sync_sound: bool,
@@ -607,6 +621,7 @@ struct FormSnapshot {
     autostart: bool,
     notifications_enabled: bool,
     log_level: String,
+    sound_preset: String,
     mute_sound_path: String,
     unmute_sound_path: String,
     on_mute_url: String,
@@ -641,7 +656,13 @@ impl eframe::App for SettingsApp {
         let tr = |key| crate::i18n::tr(&language, key);
         self.forward_registered_toggle_hotkey();
         self.capture_hotkey(ctx);
-        ctx.request_repaint_after(Duration::from_millis(30));
+        // Fast repaints only while capturing a shortcut. 100 ms still forwards
+        // the toggle hotkey promptly; the level meter schedules its own 90 ms.
+        ctx.request_repaint_after(Duration::from_millis(if self.capturing.is_some() {
+            30
+        } else {
+            100
+        }));
         // Height of the button area below content (separator + padding + buttons).
         const BUTTON_AREA_HEIGHT: f32 = 54.0;
 
@@ -842,6 +863,32 @@ impl eframe::App for SettingsApp {
                     .min_col_width(80.0)
                     .spacing([12.0, 8.0])
                     .show(ui, |ui| {
+                        ui.label(tr("sound_preset"));
+                        let before = self.sound_preset.clone();
+                        egui::ComboBox::from_id_salt("sound_preset_combo")
+                            .width(sound_control_width)
+                            .selected_text(tr(preset_label_key(&self.sound_preset)))
+                            .show_ui(ui, |ui| {
+                                for preset in focusmute_lib::config::VALID_SOUND_PRESETS {
+                                    ui.selectable_value(
+                                        &mut self.sound_preset,
+                                        (*preset).to_string(),
+                                        tr(preset_label_key(preset)),
+                                    );
+                                }
+                            });
+                        // Audition a new choice right away, ignoring any custom
+                        // file so the preset itself is what gets heard.
+                        if self.sound_preset != before {
+                            self.preview_player.play(
+                                "",
+                                &self.sound_preset,
+                                crate::sound::SoundEvent::Unmute,
+                                self.unmute_sound_volume,
+                            );
+                        }
+                        ui.end_row();
+
                         ui.label(tr("mute_sound"));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if !self.mute_sound_path.is_empty() && ui.button(tr("clear")).clicked() {
@@ -866,8 +913,11 @@ impl eframe::App for SettingsApp {
                             sound_control_width,
                             &language,
                             &mut self.mute_sound_volume,
-                            &self.mute_sound_path,
-                            crate::sound::SOUND_MUTED,
+                            SoundSource {
+                                path: &self.mute_sound_path,
+                                preset: &self.sound_preset,
+                                event: crate::sound::SoundEvent::Mute,
+                            },
                             &mut self.preview_player,
                         );
 
@@ -895,11 +945,42 @@ impl eframe::App for SettingsApp {
                             sound_control_width,
                             &language,
                             &mut self.unmute_sound_volume,
-                            &self.unmute_sound_path,
-                            crate::sound::SOUND_UNMUTED,
+                            SoundSource {
+                                path: &self.unmute_sound_path,
+                                preset: &self.sound_preset,
+                                event: crate::sound::SoundEvent::Unmute,
+                            },
                             &mut self.preview_player,
                         );
                     });
+            });
+
+            // ── On-screen indicator (Windows) ──
+            #[cfg(windows)]
+            section_frame(ui, tr("osd"), |ui| {
+                ui.checkbox(&mut self.osd_enabled, tr("osd_enabled"))
+                    .on_hover_text(tr("osd_tip"));
+                if self.osd_enabled {
+                    egui::Grid::new("osd_grid")
+                        .num_columns(2)
+                        .min_col_width(80.0)
+                        .spacing([12.0, 8.0])
+                        .show(ui, |ui| {
+                            ui.label(tr("osd_position"));
+                            egui::ComboBox::from_id_salt("osd_position_combo")
+                                .selected_text(tr(osd_position_key(&self.osd_position)))
+                                .show_ui(ui, |ui| {
+                                    for position in focusmute_lib::config::VALID_OSD_POSITIONS {
+                                        ui.selectable_value(
+                                            &mut self.osd_position,
+                                            (*position).to_string(),
+                                            tr(osd_position_key(position)),
+                                        );
+                                    }
+                                });
+                            ui.end_row();
+                        });
+                }
             });
 
             // ── System section ──
@@ -1191,6 +1272,8 @@ pub(crate) struct ValidateParams<'a> {
     pub indicator_mode: &'a str,
     pub language: &'a str,
     pub direct_button_enabled: bool,
+    pub osd_enabled: bool,
+    pub osd_position: &'a str,
     pub sound_enabled: bool,
     pub suppress_browser_sync_sound: bool,
     pub mute_sound_volume: f32,
@@ -1200,6 +1283,7 @@ pub(crate) struct ValidateParams<'a> {
     pub log_level: &'a str,
     pub mute_inputs_index: usize,
     pub input_count: usize,
+    pub sound_preset: &'a str,
     pub mute_sound_path: &'a str,
     pub unmute_sound_path: &'a str,
     pub on_mute_url: &'a str,
@@ -1261,6 +1345,7 @@ pub(crate) fn build_and_validate_config(p: &ValidateParams<'_>) -> Result<Config
         sound: focusmute_lib::config::SoundConfig {
             sound_enabled: p.sound_enabled,
             suppress_browser_sync_sound: p.suppress_browser_sync_sound,
+            sound_preset: p.sound_preset.to_string(),
             mute_sound_path: p.mute_sound_path.to_string(),
             unmute_sound_path: p.unmute_sound_path.to_string(),
             mute_sound_volume: p.mute_sound_volume,
@@ -1284,6 +1369,10 @@ pub(crate) fn build_and_validate_config(p: &ValidateParams<'_>) -> Result<Config
         hardware_button: focusmute_lib::config::HardwareButtonConfig {
             direct_button_enabled: p.direct_button_enabled,
             direct_double_click_ms: p.original.hardware_button.direct_double_click_ms,
+        },
+        osd: focusmute_lib::config::OsdConfig {
+            enabled: p.osd_enabled,
+            position: p.osd_position.to_string(),
         },
     };
 
@@ -1345,8 +1434,7 @@ fn volume_row(
     control_width: f32,
     language: &str,
     volume: &mut f32,
-    sound_path: &str,
-    builtin_sound: &'static [u8],
+    source: SoundSource<'_>,
     preview_player: &mut SoundPreviewPlayer,
 ) {
     ui.label(crate::i18n::tr(language, "volume"));
@@ -1354,7 +1442,7 @@ fn volume_row(
         let play_btn = egui::Button::new(crate::i18n::tr(language, "play"))
             .min_size(egui::vec2(browse_btn_width, 0.0));
         if ui.add(play_btn).clicked() {
-            preview_player.play(sound_path, builtin_sound, *volume);
+            preview_player.play(source.path, source.preset, source.event, *volume);
         }
         let mut pct = *volume * 100.0;
         if ui
@@ -1379,6 +1467,38 @@ fn volume_row(
         );
     });
     ui.end_row();
+}
+
+/// What a volume row's Play button previews.
+struct SoundSource<'a> {
+    path: &'a str,
+    preset: &'a str,
+    event: crate::sound::SoundEvent,
+}
+
+/// i18n key for an OSD position's display name.
+#[cfg(windows)]
+fn osd_position_key(position: &str) -> &'static str {
+    match position {
+        "bottom_left" => "osd_bottom_left",
+        "bottom_right" => "osd_bottom_right",
+        "top_left" => "osd_top_left",
+        "top_right" => "osd_top_right",
+        _ => "osd_bottom_center",
+    }
+}
+
+/// i18n key for a sound preset's display name.
+fn preset_label_key(preset: &str) -> &'static str {
+    match preset {
+        "chip" => "preset_chip",
+        "blip" => "preset_blip",
+        "arcade" => "preset_arcade",
+        "sweep" => "preset_sweep",
+        "pulse" => "preset_pulse",
+        "classic" => "preset_classic",
+        _ => "preset_chip",
+    }
 }
 
 /// Render a section with a title and grouped frame that spans the full width.
@@ -1439,6 +1559,8 @@ mod tests {
             indicator_mode: "auto",
             language: "en",
             direct_button_enabled: false,
+            osd_enabled: false,
+            osd_position: "bottom_center",
             browser_sync_reverse: false,
             blink_on_talk: false,
             blink_while_muted: false,
@@ -1452,6 +1574,7 @@ mod tests {
             log_level: "info",
             mute_inputs_index: 0,
             input_count: 2,
+            sound_preset: "chip",
             mute_sound_path: "",
             unmute_sound_path: "",
             on_mute_url: "",

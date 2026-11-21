@@ -263,6 +263,7 @@ fn handle_request(mut stream: TcpStream, tx: &mpsc::Sender<Msg>, reverse: &Rever
                 platform
             );
             tx.send(Msg::BrowserMute(muted)).ok();
+            super::wake::wake_main();
             "{\"type\":\"ack\"}"
         }
         Ok(BrowserMessage::Ping) => "{\"type\":\"pong\"}",

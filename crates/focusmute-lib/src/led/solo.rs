@@ -26,7 +26,7 @@ pub fn label(index: u8) -> &'static str {
         2 => "Inst",
         3 => "48V",
         4 => "1",
-        6..=11 => "Halo 1",
+        5..=11 => "Halo 1",
         12 => "2",
         13 => "Halo ?",
         14..=19 => "Halo 2",

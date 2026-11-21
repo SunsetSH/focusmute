@@ -71,6 +71,7 @@ pub(super) fn cmd_config(json: bool, custom_path: Option<&Path>, edit: bool) -> 
             "mute_color:",
             "hotkey:",
             "sound_enabled:",
+            "sound_preset:",
             "mute_sound_volume:",
             "unmute_sound_volume:",
             "autostart:",
@@ -110,6 +111,7 @@ pub(super) fn cmd_config(json: bool, custom_path: Option<&Path>, edit: bool) -> 
     kv_indent("mute_color:", &color_display, w);
     kv_indent("hotkey:", &config.keyboard.hotkey, w);
     kv_indent("sound_enabled:", config.sound.sound_enabled, w);
+    kv_indent("sound_preset:", &config.sound.sound_preset, w);
     kv_indent("mute_sound_volume:", config.sound.mute_sound_volume, w);
     kv_indent("unmute_sound_volume:", config.sound.unmute_sound_volume, w);
     kv_indent("autostart:", config.system.autostart, w);

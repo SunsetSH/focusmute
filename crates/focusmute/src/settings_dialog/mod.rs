@@ -37,8 +37,8 @@ impl SoundPreviewPlayer {
         SoundPreviewPlayer
     }
 
-    pub fn play(&mut self, path: &str, fallback: &'static [u8], volume: f32) {
-        let (sound, _warning) = crate::sound::load_sound_data(path, fallback);
+    pub fn play(&mut self, path: &str, preset: &str, event: crate::sound::SoundEvent, volume: f32) {
+        let (sound, _warning) = crate::sound::load_sound_data(path, preset, event);
         crate::sound::play_sound(&sound, volume);
     }
 }

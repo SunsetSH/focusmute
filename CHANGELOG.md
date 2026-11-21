@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-11-21
+
+### Added
+
+- Built-in electronic mute/unmute sound presets, synthesized in memory: `chip` (default), `blip`, `arcade`, `sweep`, `pulse`; the original WAV pair stays available as `classic`. New `[sound].sound_preset` field and a "Sound set" selector in Settings that auditions the choice immediately. A custom WAV path still overrides the preset for that event
+- Optional on-screen indicator (Windows, `[osd]`, off by default): a click-through banner for 1.5 s when mute changes, anchored to a corner or the bottom center. With "Blink on talk" enabled it also warns when you talk while muted. While off, no window, timer or thread exists
+- The tray follows a change of the Windows default microphone instead of staying on the device it started with
+
+### Changed
+
+- Mute feedback (LEDs, sound, icon) follows the hotkey in ~30 ms instead of ~280 ms: after a mute event the poll thread takes its confirming sample after 25 ms rather than after the 250 ms idle period, and background threads wake the main loop directly. The idle main loop now wakes every 500 ms instead of every 50 ms
+- The Direct button is watched by a background listener that exists only while the option is on; the main loop no longer issues a notification IOCTL 20 times a second
+- Windows plays mute/unmute sounds with `PlaySoundW` through the system mixer, without opening an audio stream per beep
+- The settings window repaints at 100 ms instead of 30 ms except while capturing a shortcut
+- Solo LED documentation: LED 5 is the first segment of the input 1 level ring (5–11). Channel numbers are unchanged: input 1 is LED 4, input 2 is LED 12
+
+### Fixed
+
+- CI clippy failures (`-D warnings`): `chunks_exact(4)` in the LED lab is now `as_chunks::<4>()`, and `volume_row` takes its preview source as one argument
+
 ## [0.11.0] - 2026-09-11
 
 ### Changed

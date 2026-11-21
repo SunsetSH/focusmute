@@ -133,6 +133,17 @@ impl DeviceInfo {
 
 // ── Trait ──
 
+/// Blocking source of device notifications, usable from a background thread.
+///
+/// Obtained from [`ScarlettDevice::notify_listener`]. It shares the device's
+/// session, so it keeps working across the owner's TRANSACT traffic, and it
+/// stops (returns an error) once the device goes away.
+pub trait NotifyListener: Send {
+    /// Wait up to `timeout_ms` for one notification packet.
+    /// `Ok(None)` means the timeout elapsed with nothing to report.
+    fn wait(&self, timeout_ms: u32) -> Result<Option<Vec<u8>>>;
+}
+
 pub trait ScarlettDevice {
     fn open() -> Result<Self>
     where
@@ -151,6 +162,12 @@ pub trait ScarlettDevice {
         Err(DeviceError::TransactFailed(
             "wait_notify not supported on this platform".into(),
         ))
+    }
+
+    /// A notification listener for a background thread, or `None` where the
+    /// platform has no notification channel.
+    fn notify_listener(&self) -> Option<Box<dyn NotifyListener>> {
+        None
     }
 
     /// Send a raw IOCTL (bypassing TRANSACT framing).
@@ -315,6 +332,10 @@ mod win_ffi {
         }
     }
 
+    /// Start of the error string `ioctl_impl` returns when an
+    /// `OverlappedTimeout` wait expires.
+    pub const TIMEOUT_PREFIX: &str = "IOCTL timed out";
+
     /// I/O completion strategy for DeviceIoControl.
     pub enum WaitStrategy {
         /// Synchronous — no OVERLAPPED struct.
@@ -454,7 +475,7 @@ mod win_ffi {
                                     // Wait for cancellation to complete
                                     let _ = GetOverlappedResult(handle, &ov, &mut ret, true);
                                 }
-                                Err(format!("IOCTL timed out after {}ms", timeout_ms))
+                                Err(format!("{TIMEOUT_PREFIX} after {timeout_ms}ms"))
                             }
                             _ => {
                                 // WAIT_FAILED or other
@@ -780,9 +801,59 @@ mod windows_impl {
             .map_err(DeviceError::TransactFailed)
         }
 
+        fn notify_listener(&self) -> Option<Box<dyn NotifyListener>> {
+            use windows::Win32::System::Threading::GetCurrentProcess;
+            // A duplicate refers to the same file object, so the listener sees
+            // this session's notifications and outlives a reopen of `self`.
+            let mut dup = HANDLE::default();
+            let ok = unsafe {
+                DuplicateHandle(
+                    GetCurrentProcess(),
+                    self.handle.as_raw(),
+                    GetCurrentProcess(),
+                    &mut dup,
+                    0,
+                    false,
+                    DUPLICATE_SAME_ACCESS,
+                )
+            };
+            if let Err(e) = ok {
+                log::warn!("[device] could not duplicate handle for notifications: {e}");
+                return None;
+            }
+            Some(Box::new(WindowsNotifyListener {
+                handle: OwnedHandle::new(dup),
+            }))
+        }
+
         fn raw_ioctl(&self, code: u32, input: &[u8], out_size: usize) -> Result<Vec<u8>> {
             self.ioctl_async(code, input, out_size)
                 .map_err(DeviceError::TransactFailed)
+        }
+    }
+
+    /// IOCTL_NOTIFY on a duplicated device handle.
+    struct WindowsNotifyListener {
+        handle: OwnedHandle,
+    }
+
+    // SAFETY: the handle is owned exclusively by this listener and only used
+    // with thread-safe overlapped DeviceIoControl calls.
+    unsafe impl Send for WindowsNotifyListener {}
+
+    impl NotifyListener for WindowsNotifyListener {
+        fn wait(&self, timeout_ms: u32) -> Result<Option<Vec<u8>>> {
+            match ioctl_impl(
+                self.handle.as_raw(),
+                IOCTL_NOTIFY,
+                &[],
+                16,
+                WaitStrategy::OverlappedTimeout(timeout_ms),
+            ) {
+                Ok(packet) => Ok(Some(packet)),
+                Err(e) if e.starts_with(super::win_ffi::TIMEOUT_PREFIX) => Ok(None),
+                Err(e) => Err(DeviceError::TransactFailed(e)),
+            }
         }
     }
 

@@ -3,7 +3,7 @@
 //! via the [`PlatformAdapter`] trait.
 
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -41,8 +41,9 @@ pub trait PlatformAdapter {
     /// Pump platform-specific events (Win32 messages, GTK iterations).
     fn pump_events();
 
-    /// Block until the next platform event or a reasonable timeout.
-    fn wait_for_events();
+    /// Block until the next platform event, a [`super::wake::wake_main`]
+    /// call, or `timeout`. Linux keeps its fixed 50 ms GTK timer instead.
+    fn wait_for_events(timeout: Duration);
 
     /// Register for device hotplug notifications (called once at startup).
     fn register_device_notifications() {}
@@ -52,6 +53,128 @@ pub trait PlatformAdapter {
     fn check_device_removed() -> bool {
         false
     }
+}
+
+/// Idle period of the mute poll thread: the safety net for a missed
+/// audio-system callback.
+const POLL_IDLE: Duration = Duration::from_millis(250);
+
+/// Delay before the confirming sample after a mute event. The debouncer needs
+/// two equal samples; taking the second one right away instead of after
+/// [`POLL_IDLE`] cuts the hotkey-to-LED latency from ~280 ms to ~30 ms while
+/// still filtering one-sample COM/endpoint flicker.
+const POLL_CONFIRM: Duration = Duration::from_millis(25);
+
+/// Main-loop wait while something is timed: a blink, a Direct gesture, a
+/// muted-talk meter read, or a pending reconnect.
+const LOOP_BUSY: Duration = Duration::from_millis(50);
+
+/// Main-loop wait when idle. Every input that matters (tray, hotkeys,
+/// background messages) wakes the loop early, so this is only a fallback.
+const LOOP_IDLE: Duration = Duration::from_millis(500);
+
+/// Body of the platform mute poll threads.
+pub fn run_poll_loop<M: MuteMonitor>(monitor: &M, tx: &mpsc::Sender<Msg>) {
+    while crate::RUNNING.load(Ordering::SeqCst) {
+        let woke = monitor.wait_for_change(POLL_IDLE);
+        monitor.refresh();
+        if tx.send(Msg::MutePoll(monitor.is_muted())).is_err() {
+            break;
+        }
+        if !woke {
+            // Idle samples need no prompt handling; the loop drains them at
+            // its next wake.
+            continue;
+        }
+        super::wake::wake_main();
+        std::thread::sleep(POLL_CONFIRM);
+        monitor.refresh();
+        if tx.send(Msg::MutePoll(monitor.is_muted())).is_err() {
+            break;
+        }
+        super::wake::wake_main();
+    }
+}
+
+/// Background listener for Direct-button notifications.
+///
+/// Exists only while the Direct option is on and a Solo is connected, so a
+/// disabled option costs no thread and no device I/O.
+struct DirectWatcher {
+    stop: Arc<AtomicBool>,
+    handle: JoinHandle<()>,
+}
+
+impl DirectWatcher {
+    /// How long one notification wait blocks before re-checking `stop`.
+    const WAIT_MS: u32 = 1000;
+    /// Minimum gap between restarts after the listener thread exits.
+    const RETRY: Duration = Duration::from_secs(2);
+
+    fn spawn(
+        listener: Box<dyn focusmute_lib::device::NotifyListener>,
+        tx: mpsc::Sender<Msg>,
+    ) -> Option<Self> {
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&stop);
+        let handle = std::thread::Builder::new()
+            .name("direct-notify".into())
+            .spawn(move || {
+                log::debug!("[direct] listener started");
+                while !thread_stop.load(Ordering::SeqCst) && crate::RUNNING.load(Ordering::SeqCst) {
+                    match listener.wait(Self::WAIT_MS) {
+                        Ok(Some(packet)) => {
+                            if tx.send(Msg::DirectNotify(packet)).is_err() {
+                                break;
+                            }
+                            super::wake::wake_main();
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            // Device gone or channel unusable; the main loop
+                            // restarts the listener if Direct is still wanted.
+                            log::debug!("[direct] listener stopped: {e}");
+                            break;
+                        }
+                    }
+                }
+            })
+            .ok()?;
+        Some(Self { stop, handle })
+    }
+
+    /// Ask the thread to exit; it does so within [`Self::WAIT_MS`].
+    fn stop(self) {
+        self.stop.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Start, stop or restart the Direct listener to match `wanted`.
+fn sync_direct_watcher(
+    watcher: &mut Option<DirectWatcher>,
+    last_spawn: &mut Option<Instant>,
+    wanted: bool,
+    device: Option<&impl ScarlettDevice>,
+    tx: &mpsc::Sender<Msg>,
+) {
+    if watcher.as_ref().is_some_and(|w| w.handle.is_finished()) {
+        *watcher = None;
+    }
+    if !wanted {
+        if let Some(w) = watcher.take() {
+            w.stop();
+            log::debug!("[direct] listener stopping");
+        }
+        return;
+    }
+    if watcher.is_some() || last_spawn.is_some_and(|at| at.elapsed() < DirectWatcher::RETRY) {
+        return;
+    }
+    let Some(listener) = device.and_then(|d| d.notify_listener()) else {
+        return;
+    };
+    *last_spawn = Some(Instant::now());
+    *watcher = DirectWatcher::spawn(listener, tx.clone());
 }
 
 /// Classifies Direct *state changes* into a delayed single or a double gesture.
@@ -115,58 +238,52 @@ impl DirectGesture {
         self.pending = None;
     }
 
+    /// A single press is waiting for its double-click window to expire.
+    fn is_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
     fn suppress_own_notifications(&mut self, now: Instant, expected_state: bool) {
         self.ignore_until = now + Duration::from_millis(200);
         self.expected_own_state = Some((expected_state, now + Duration::from_secs(2)));
     }
 }
 
-fn handle_direct_button<M: MuteMonitor>(
+/// Classify one device notification from the Direct listener.
+fn handle_direct_notify<M: MuteMonitor>(
     device: &impl ScarlettDevice,
     monitor: Option<&M>,
     muted: bool,
-    enabled: bool,
     window_ms: u64,
     gesture: &mut DirectGesture,
+    packet: &[u8],
 ) {
-    if !enabled || !focusmute_lib::direct::is_solo(device) {
+    let now = Instant::now();
+    let Some(mask) = focusmute_lib::direct::notification_mask(packet) else {
+        log::warn!(
+            "[direct] ignored short device notification ({} bytes)",
+            packet.len()
+        );
+        return;
+    };
+    if mask & focusmute_lib::direct::SOLO_VIDEO_CALL_NOTIFY_MASK != 0 {
+        // A three-second hold is reserved by Solo for Combine Inputs.
+        gesture.cancel();
         return;
     }
-    let now = Instant::now();
-    match device.wait_notify(0) {
-        Ok(packet) => {
-            let Some(mask) = focusmute_lib::direct::notification_mask(&packet) else {
-                log::warn!(
-                    "[direct] ignored short device notification ({} bytes)",
-                    packet.len()
-                );
-                return;
-            };
-            if mask & focusmute_lib::direct::SOLO_VIDEO_CALL_NOTIFY_MASK != 0 {
-                // A three-second hold is reserved by Solo for Combine Inputs.
-                gesture.cancel();
-                return;
-            }
-            if mask & focusmute_lib::direct::SOLO_DIRECT_NOTIFY_MASK != 0 {
-                match focusmute_lib::direct::solo_direct_enabled(device) {
-                    Ok(current) => {
-                        if let Some(action) = gesture.changed(
-                            now,
-                            current,
-                            Duration::from_millis(window_ms.clamp(200, 600)),
-                        ) {
-                            apply_direct_action(device, monitor, muted, gesture, action, now);
-                        }
-                    }
-                    Err(e) => log::warn!("[direct] could not read Direct state: {e}"),
+    if mask & focusmute_lib::direct::SOLO_DIRECT_NOTIFY_MASK != 0 {
+        match focusmute_lib::direct::solo_direct_enabled(device) {
+            Ok(current) => {
+                if let Some(action) = gesture.changed(
+                    now,
+                    current,
+                    Duration::from_millis(window_ms.clamp(200, 600)),
+                ) {
+                    apply_direct_action(device, monitor, muted, gesture, action, now);
                 }
             }
+            Err(e) => log::warn!("[direct] could not read Direct state: {e}"),
         }
-        Err(e) if e.to_string().contains("timed out") => {}
-        Err(e) => log::debug!("[direct] notification poll unavailable: {e}"),
-    }
-    if let Some(action) = gesture.tick(now) {
-        apply_direct_action(device, monitor, muted, gesture, action, now);
     }
 }
 
@@ -208,6 +325,7 @@ fn apply_direct_action<M: MuteMonitor>(
 /// bits are injected via `P: PlatformAdapter`.
 pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
     P::platform_init()?;
+    super::wake::register_main_thread();
 
     // Open device and initialise shared state.
     // If the device isn't connected yet, start with a no-op strategy and
@@ -346,8 +464,9 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
     }
 
     // Channel for background → main thread communication.
-    // Each background thread gets its own clone; the main thread drops its
-    // sender so that TryRecvError::Disconnected fires when all threads die.
+    // Each background thread gets its own clone. The main thread keeps one
+    // sender for the on-demand Direct listener, so poll-thread death is
+    // detected with `JoinHandle::is_finished` rather than a disconnect.
     let (tx, rx): (mpsc::Sender<Msg>, Receiver<Msg>) = mpsc::channel();
 
     // Spawn background poll thread
@@ -375,9 +494,7 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
         None
     };
 
-    // Main thread no longer holds a sender — channel disconnects when
-    // all background threads exit.
-    drop(tx);
+    let direct_tx = tx;
 
     // Register for USB device hotplug notifications (event-driven, no polling).
     P::register_device_notifications();
@@ -391,6 +508,10 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
     let mut browser_sync_pending = false;
     let mut blink = super::blink::BlinkState::new();
     let mut direct_gesture = DirectGesture::new();
+    let mut direct_watcher: Option<DirectWatcher> = None;
+    let mut direct_last_spawn: Option<Instant> = None;
+    // No window exists until the first banner is shown.
+    let mut osd = crate::osd::Osd::new();
 
     loop {
         if !RUNNING.load(Ordering::SeqCst) {
@@ -400,6 +521,9 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
         // 1. Platform event pump — dispatches WM_DEVICECHANGE (among others)
         //    which sets the device-removed flag checked below.
         P::pump_events();
+        if let Some(ref m) = main_monitor {
+            m.maintain();
+        }
 
         // 1b. Device removal detection (event-driven via RegisterDeviceNotification).
         if device.is_some() && P::check_device_removed() {
@@ -424,18 +548,34 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
             }
         }
 
-        // Direct is an opt-in Solo gesture. It deliberately runs before the
-        // audio-message drain so a generated WASAPI callback is processed by
-        // the normal mute state machine on the following pass.
-        if let Some(ref dev) = device {
-            handle_direct_button(
-                dev,
-                main_monitor.as_deref(),
-                state.indicator.is_muted(),
-                state.config.hardware_button.direct_button_enabled,
-                state.config.hardware_button.direct_double_click_ms,
-                &mut direct_gesture,
-            );
+        // Direct is an opt-in Solo gesture. Its listener thread exists only
+        // while the option is on; notifications arrive as Msg::DirectNotify.
+        let direct_wanted = state.config.hardware_button.direct_button_enabled
+            && device.as_ref().is_some_and(focusmute_lib::direct::is_solo);
+        sync_direct_watcher(
+            &mut direct_watcher,
+            &mut direct_last_spawn,
+            direct_wanted,
+            device.as_ref(),
+            &direct_tx,
+        );
+        if !direct_wanted {
+            direct_gesture.cancel();
+        } else if let Some(ref dev) = device {
+            let now = Instant::now();
+            if let Some(action) = direct_gesture.tick(now) {
+                apply_direct_action(
+                    dev,
+                    main_monitor.as_deref(),
+                    state.indicator.is_muted(),
+                    &mut direct_gesture,
+                    action,
+                    now,
+                );
+            }
+        }
+        if !state.config.osd.enabled {
+            osd.destroy();
         }
 
         // 3. Drain background messages (non-blocking)
@@ -484,6 +624,34 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
                         device.is_some(),
                         suppress_sound,
                     );
+                    if state.config.osd.enabled && device.is_some() {
+                        let kind = match action {
+                            MonitorAction::ApplyMute => Some(crate::osd::OsdKind::Muted),
+                            MonitorAction::ClearMute => Some(crate::osd::OsdKind::Live),
+                            MonitorAction::NoChange => None,
+                        };
+                        if let Some(kind) = kind {
+                            osd.show(
+                                kind,
+                                &state.config.system.language,
+                                &state.config.osd.position,
+                            );
+                        }
+                    }
+                }
+                Ok(Msg::DirectNotify(packet)) => {
+                    // Direct actions run in this pass; a resulting mute change
+                    // arrives as a MutePoll on a following pass.
+                    if direct_wanted && let Some(ref dev) = device {
+                        handle_direct_notify(
+                            dev,
+                            main_monitor.as_deref(),
+                            state.indicator.is_muted(),
+                            state.config.hardware_button.direct_double_click_ms,
+                            &mut direct_gesture,
+                            &packet,
+                        );
+                    }
                 }
                 Ok(Msg::BrowserMute(muted)) => {
                     // Coalesce: Meet flickers its mute state during join-screen
@@ -494,15 +662,12 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
                     // sync is level-triggered — only the last state matters.
                     browser_mute_target = Some(muted);
                 }
-                Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    if !poll_thread_dead {
-                        log::error!("[audio] monitor thread stopped unexpectedly");
-                        poll_thread_dead = true;
-                    }
-                    break;
-                }
+                Err(_) => break,
             }
+        }
+        if !poll_thread_dead && bg_handle.as_ref().is_some_and(|h| h.is_finished()) {
+            log::error!("[audio] monitor thread stopped unexpectedly");
+            poll_thread_dead = true;
         }
         if let Some(muted) = browser_mute_target {
             handle_browser_mute(
@@ -556,6 +721,13 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
             } else {
                 None
             };
+            if talking == Some(true) && state.config.osd.enabled {
+                osd.show(
+                    crate::osd::OsdKind::Talking,
+                    &state.config.system.language,
+                    &state.config.osd.position,
+                );
+            }
             if let Some(action) = blink.advance(now, talking) {
                 apply_blink_action(dev, &state, action);
             }
@@ -659,9 +831,23 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
             }
         }
 
-        // 6. Wait for events (platform-specific sleep/block)
-        P::wait_for_events();
+        // 6. Wait for events (platform-specific sleep/block). Short only
+        //    while something is timed; otherwise wakes come from messages.
+        let talk_watch = state.config.indicator.blink_on_talk
+            && !state.config.indicator.blink_while_muted
+            && state.indicator.is_muted();
+        let busy = device.is_none()
+            || direct_gesture.is_pending()
+            || state.indicator.is_animating()
+            || (talk_watch && device.is_some());
+        P::wait_for_events(if busy { LOOP_BUSY } else { LOOP_IDLE });
     }
+
+    if let Some(watcher) = direct_watcher.take() {
+        watcher.stop();
+    }
+    osd.destroy();
+    drop(direct_tx);
 
     // Cleanup — join background threads, unmute, restore LEDs, then drop monitor.
     // Joining before drop ensures the monitor is dropped on the main thread
@@ -1004,5 +1190,64 @@ mod tests {
         let mut pending = true;
         handle_browser_mute(Some(&monitor), true, true, &mut pending);
         assert!(!pending);
+    }
+
+    /// Monitor whose first wait reports a mute event; later waits time out.
+    struct EventOnceMonitor {
+        fired: std::sync::atomic::AtomicBool,
+    }
+
+    impl MuteMonitor for EventOnceMonitor {
+        fn is_muted(&self) -> bool {
+            true
+        }
+        fn set_muted(&self, _muted: bool) -> focusmute_lib::audio::Result<()> {
+            Ok(())
+        }
+        fn wait_for_change(&self, timeout: Duration) -> bool {
+            if self.fired.swap(true, Ordering::SeqCst) {
+                std::thread::sleep(timeout);
+                false
+            } else {
+                true
+            }
+        }
+    }
+
+    /// The debouncer needs two equal samples. After an event the second one
+    /// must follow within POLL_CONFIRM, not a whole POLL_IDLE later.
+    #[test]
+    fn poll_loop_confirms_an_event_without_waiting_the_idle_period() {
+        let (tx, rx) = mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let monitor = EventOnceMonitor {
+                fired: std::sync::atomic::AtomicBool::new(false),
+            };
+            run_poll_loop(&monitor, &tx);
+        });
+        let first = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let start = Instant::now();
+        let second = rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let gap = start.elapsed();
+        assert!(matches!(first, Msg::MutePoll(true)));
+        assert!(matches!(second, Msg::MutePoll(true)));
+        assert!(gap < POLL_IDLE, "confirming sample took {gap:?}");
+        drop(rx);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn direct_gesture_reports_pending_single_press() {
+        let mut gesture = DirectGesture::new();
+        assert!(!gesture.is_pending());
+        let now = Instant::now() + Duration::from_secs(1);
+        assert!(
+            gesture
+                .changed(now, true, Duration::from_millis(350))
+                .is_none()
+        );
+        assert!(gesture.is_pending());
+        gesture.cancel();
+        assert!(!gesture.is_pending());
     }
 }

@@ -14,7 +14,7 @@ fn get_mic_status() -> Option<MicrophoneStatusJson> {
         audio::com_init().ok()?;
         let monitor = audio::WasapiMonitor::new().ok()?;
         let muted = monitor.is_muted();
-        let name = monitor.device_name().map(|s| s.to_string());
+        let name = monitor.device_name();
         Some(MicrophoneStatusJson { muted, name })
     }
     #[cfg(target_os = "linux")]

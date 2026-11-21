@@ -130,6 +130,14 @@ impl MuteIndicator {
         self.blink_off = false;
     }
 
+    /// Whether [`animate`](Self::animate) has timed work to do. The tray loop
+    /// uses this to pick a short wake interval only while blinking.
+    pub fn is_animating(&self) -> bool {
+        self.is_muted()
+            && (self.blink_while_muted
+                || self.render_mode == led::IndicatorRenderMode::NumbersBlink)
+    }
+
     /// Independent of input level: one complete mute blink per second.
     pub fn animate(&mut self, device: &impl ScarlettDevice, now: Instant) -> Result<()> {
         if !self.is_muted()
