@@ -538,6 +538,12 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
         {
             log::info!("[device] reconnected: {}", new_dev.info().device_name);
             device = Some(new_dev);
+            // A listener still on the previous handle would hear the old
+            // session; let the next sync open one on the new device.
+            if let Some(watcher) = direct_watcher.take() {
+                watcher.stop();
+            }
+            direct_last_spawn = None;
             tray_menu.set_device_connected(true, &tray);
             // Restore correct icon based on current mute state
             state::set_tray_mute_state(&tray, state.indicator.is_muted());

@@ -292,3 +292,13 @@ Workflow `CI` (`check.yml`) на push в `main` 2026-09-21 упал на шаг�
 - Сборка на Linux. Нет WSL, а gtk и libpulse не собираются кросс-компиляцией. Изменения для Linux: общий `run_poll_loop`, сигнатура `wait_for_events` и импорты в `tray/linux.rs`. Их проверит CI.
 - Release-сборка: `target/release/focusmute.exe` был запущен и заблокирован.
 - На живом устройстве не проверялись: OSD, звук через `PlaySoundW`, смена микрофона, кнопка Direct с фоновым слушателем.
+
+## 11. Повторная проверка и CI
+
+- CI теперь проверяет и Windows-код: `cargo clippy --target x86_64-pc-windows-gnu -- -D warnings` на Linux-раннере с mingw (как в upstream). Раньше OSD, звук, WASAPI и Direct на CI не компилировались вообще. Linux-пакеты ставятся через общий action, который проваливает job при неудачной установке, а не кеширует пустой набор.
+- Исправлено после первых запусков CI: `needless_range_loop` в тесте `layout.rs` (новый clippy) и проверка advisories. `flexi_logger` 0.32 перешёл с `chrono` на `jiff` (RUSTSEC-2026-0543). Для `zvariant`/`zbus_names`/`zvariant_derive` из `notify-rust` на Linux добавлены исключения, как в upstream.
+- Toolchain для локальной проверки обновлён до того же stable, что на CI (rustc 1.100). Локально проходят `fmt --check`, `clippy -D warnings`, `cargo deny check advisories` и все тесты.
+- Слушатель Direct перезапускается после переподключения устройства, чтобы не остаться на handle старой сессии.
+- `PlaySoundW` играет через канал «Системные звуки» микшера Windows. Если этот канал приглушён, бипов FocusMute тоже не будет.
+- Удалены поля `homepage`, дублирующие `repository` (предупреждение cargo).
+
