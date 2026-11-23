@@ -214,15 +214,26 @@ mod tests {
                 mute_colors: vec![],
                 selected_color: 0x20FF_0000,
                 unselected_color: 0x88FF_FF00,
+                offsets: Default::default(),
+                extended: None,
             },
         )
     }
 
     #[test]
     fn solo_mute_blink_restores_white_on_unmute_and_stops_writing() {
-        let mut dev = MockDevice::new();
-        dev.info_mut().device_name = "Scarlett Solo 4th Gen-TEST".into();
-        let mut indicator = make_indicator(true);
+        let dev = MockDevice::new();
+        let profile = crate::models::detect_model("Scarlett Solo 4th Gen").unwrap();
+        let (strategy, _) = led::resolve_mute_strategy(
+            &crate::config::MuteInputs::All,
+            Some(profile),
+            None,
+            0xFF00_0000,
+            &Default::default(),
+            profile.offsets,
+        )
+        .unwrap();
+        let mut indicator = MuteIndicator::new(2, true, 0xFF00_0000, strategy);
         indicator.set_render_mode(led::IndicatorRenderMode::NumbersBlink);
         let now = Instant::now();
         indicator.animate(&dev, now).unwrap();
@@ -436,6 +447,8 @@ mod tests {
             mute_colors: vec![],
             selected_color: 0x20FF_0000,
             unselected_color: 0x88FF_FF00,
+            offsets: Default::default(),
+            extended: None,
         };
         ind.set_strategy(new_strategy);
         assert!(

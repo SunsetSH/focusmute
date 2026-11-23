@@ -1,5 +1,10 @@
-//! Observed Solo mapping from docs/20-ledtest.md, not a predicted 2i2 layout.
+//! Solo LED Lab: single-LED tests on the observed Solo panel map
+//! (docs/20-ledtest.md, docs/21), not a predicted 2i2 layout.
+//!
+//! Every entry point takes the device's [`Panel`], which only a Solo on a
+//! verified firmware layout has, so the Lab cannot write to any other device.
 use crate::device::{DeviceError, Result, ScarlettDevice};
+use crate::models::Panel;
 
 /// Confirmed physical number LEDs from `20-ledtest.md`.
 pub const INPUT_1_LED: u8 = 4;
@@ -45,30 +50,60 @@ pub fn can_test(index: u8) -> bool {
         || (13..=19).contains(&index)
 }
 
-fn require_solo(device: &impl ScarlettDevice) -> Result<()> {
-    if !crate::direct::is_solo(device) {
-        return Err(DeviceError::UnsupportedDevice(device.info().model().into()));
-    }
-    Ok(())
+fn require_panel(device: &impl ScarlettDevice, panel: Option<Panel>) -> Result<Panel> {
+    panel.ok_or_else(|| DeviceError::UnsupportedDevice(device.info().model().into()))
 }
 
-pub fn test_led(device: &impl ScarlettDevice, index: u8, color: u32) -> Result<()> {
-    require_solo(device)?;
+pub fn test_led(
+    device: &impl ScarlettDevice,
+    panel: Option<Panel>,
+    index: u8,
+    color: u32,
+) -> Result<()> {
+    let panel = require_panel(device, panel)?;
     if !can_test(index) {
         return Err(DeviceError::TransactFailed(
             "LED restoration is unverified for this index; test disabled".into(),
         ));
     }
-    super::set_single_led(device, index, color)
+    super::set_single_led(device, panel.offsets, index, color)
 }
 
 /// No DATA_NOTIFY(5): that command applies the bulk array, including its
 /// zero entries. It does not restore the pre-test physical panel colours.
-pub fn restore_test(device: &impl ScarlettDevice, inputs: &[usize]) -> Result<()> {
-    require_solo(device)?;
+pub fn restore_test(
+    device: &impl ScarlettDevice,
+    panel: Option<Panel>,
+    inputs: &[usize],
+) -> Result<()> {
+    let panel = require_panel(device, panel)?;
     number_leds(inputs)
         .into_iter()
-        .try_for_each(|index| super::set_single_led(device, index, WHITE))
+        .try_for_each(|index| super::set_single_led(device, panel.offsets, index, WHITE))
+}
+
+/// Read-only snapshot of the LED mode, Air, Direct and the bulk LED command
+/// buffer: `(mode, air, direct, values)`.
+pub fn snapshot(
+    device: &impl ScarlettDevice,
+    panel: Option<Panel>,
+) -> Result<(u8, u8, u8, Vec<u8>)> {
+    let panel = require_panel(device, panel)?;
+    let byte = |offset| -> Result<u8> {
+        Ok(device
+            .get_descriptor(offset, 1)?
+            .first()
+            .copied()
+            .unwrap_or(0))
+    };
+    let mode = byte(panel.offsets.enable_direct_led)?;
+    let direct = byte(panel.controls.direct_monitoring)?;
+    let values = device.get_descriptor(
+        panel.offsets.direct_led_values,
+        panel.offsets.direct_led_size(),
+    )?;
+    let air = byte(panel.controls.input_air)?;
+    Ok((mode, air, direct, values))
 }
 
 #[cfg(test)]
@@ -76,13 +111,21 @@ mod tests {
     use super::*;
     use crate::device::mock::MockDevice;
 
+    fn solo() -> (MockDevice, Option<Panel>) {
+        let mut dev = MockDevice::new();
+        dev.info_mut().device_name = "Scarlett Solo 4th Gen-TEST".into();
+        let panel = crate::models::panel(dev.info());
+        (dev, panel)
+    }
+
     #[test]
     fn lab_rejects_unrestorable_lights_and_non_solo_without_writes() {
-        let mut dev = MockDevice::new();
-        assert!(test_led(&dev, 4, WHITE).is_err());
-        dev.info_mut().device_name = "Scarlett Solo 4th Gen-TEST".into();
+        let dev = MockDevice::new();
+        let panel = crate::models::panel(dev.info());
+        assert!(test_led(&dev, panel, 4, WHITE).is_err());
+        let (dev, panel) = solo();
         for index in [0, 1, 2, 3, 5, 20, 24, 25, 26, 27, 31, 255] {
-            assert!(test_led(&dev, index, WHITE).is_err());
+            assert!(test_led(&dev, panel, index, WHITE).is_err());
         }
         assert!(dev.descriptors.borrow().is_empty());
         assert!(dev.notifies.borrow().is_empty());
@@ -90,13 +133,28 @@ mod tests {
 
     #[test]
     fn restore_never_applies_a_bulk_array_or_changes_audio_modes() {
-        let mut dev = MockDevice::new();
-        dev.info_mut().device_name = "Scarlett Solo 4th Gen-TEST".into();
-        restore_test(&dev, &[0, 1]).unwrap();
+        let (dev, panel) = solo();
+        restore_test(&dev, panel, &[0, 1]).unwrap();
         let writes = dev.descriptors.borrow();
         assert_eq!(writes.len(), 2);
         assert_eq!(writes.get(&84), Some(&vec![12]));
         assert_eq!(writes.get(&80), Some(&WHITE.to_le_bytes().to_vec()));
         assert_eq!(*dev.notifies.borrow(), vec![8, 8]);
+    }
+
+    #[test]
+    fn snapshot_reads_the_solo_fields_and_writes_nothing() {
+        use crate::device::mock::MockOp;
+        let (dev, panel) = solo();
+        snapshot(&dev, panel).unwrap();
+        assert_eq!(
+            *dev.ops.borrow(),
+            vec![
+                MockOp::Get(72, 1),
+                MockOp::Get(264, 1),
+                MockOp::Get(88, 128),
+                MockOp::Get(62, 1),
+            ]
+        );
     }
 }

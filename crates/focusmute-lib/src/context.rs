@@ -55,22 +55,25 @@ impl DeviceContext {
 
         let offsets = if let Some(ref sc) = schema {
             DeviceOffsets::from_schema(sc)
-        } else if profile.is_none() {
-            return Err(DeviceError::UnsupportedDevice(device.info().model().to_string()).into());
+        } else if let Some(p) = profile {
+            // The profile carries its own offsets. A shared default here would
+            // hand every profiled model the 2i2's, which is wrong the moment a
+            // second profile exists.
+            p.offsets.clone()
         } else {
-            // Known profile but no schema — safe to use defaults
-            DeviceOffsets::default()
+            return Err(DeviceError::UnsupportedDevice(device.info().model().to_string()).into());
         };
 
-        let predicted = if profile.is_none() {
-            schema.as_ref().and_then(|sc| {
-                layout::predict_layout(sc)
-                    .inspect_err(|e| log::debug!("[context] layout prediction failed: {e}"))
-                    .ok()
-            })
-        } else {
-            None
-        };
+        // Predict whenever a schema is in hand, profile or not. The profile
+        // still wins everywhere both exist (`resolve_mute_strategy`,
+        // `input_count`); this is what `map` labels its panel walk from, and
+        // what `--output-code` builds its skeleton from, on a model that
+        // already has a profile.
+        let predicted = schema.as_ref().and_then(|sc| {
+            layout::predict_layout(sc)
+                .inspect_err(|e| log::debug!("[context] layout prediction failed: {e}"))
+                .ok()
+        });
 
         Ok(DeviceContext {
             profile,
@@ -92,6 +95,14 @@ impl DeviceContext {
 mod tests {
     use super::*;
     use crate::device::mock::MockDevice;
+
+    /// A mock that serves the 2i2 test schema over the devmap commands, so
+    /// `resolve_at` can actually extract one.
+    fn mock_with_schema(name: &str) -> MockDevice {
+        let dev = mock_with_name(name);
+        dev.serve_schema(&crate::schema::tests::test_schema_json());
+        dev
+    }
 
     fn mock_with_name(name: &str) -> MockDevice {
         let mut dev = MockDevice::new();
@@ -123,9 +134,91 @@ mod tests {
         // Schema extraction will fail on mock but profile is still detected
     }
 
+    /// A profile short-circuits schema extraction, so the offsets have to come
+    /// from the profile. Before profiles carried their own, every profiled
+    /// model silently inherited the 2i2's.
+    #[test]
+    fn profile_without_schema_uses_that_profiles_offsets_not_the_2i2_default() {
+        let dev = mock_with_name("Scarlett Solo 4th Gen-00031337");
+        let ctx = DeviceContext::resolve(&dev, false).unwrap();
+        assert!(
+            ctx.schema.is_none(),
+            "profile should short-circuit extraction"
+        );
+
+        let defaults = DeviceOffsets::default();
+        assert_eq!(ctx.offsets.direct_led_colour, 80);
+        assert_eq!(ctx.offsets.direct_led_index, 84);
+        assert_eq!(ctx.offsets.enable_direct_led, 72);
+        assert_eq!(ctx.offsets.selected_input, None);
+        assert_ne!(ctx.offsets.direct_led_colour, defaults.direct_led_colour);
+        assert_ne!(ctx.offsets.direct_led_index, defaults.direct_led_index);
+    }
+
+    #[test]
+    fn known_verified_model_still_resolves_the_2i2_offsets() {
+        let dev = mock_with_name("Scarlett 2i2 4th Gen-00031337");
+        let ctx = DeviceContext::resolve(&dev, false).unwrap();
+        let defaults = DeviceOffsets::default();
+        assert_eq!(ctx.offsets.direct_led_colour, defaults.direct_led_colour);
+        assert_eq!(ctx.offsets.direct_led_index, defaults.direct_led_index);
+        assert_eq!(ctx.offsets.selected_input, defaults.selected_input);
+    }
+
+    /// `map` forces schema extraction so it can label the panel walk and print
+    /// a profile skeleton. Gating prediction on the absence of a profile made
+    /// both produce nothing for exactly the models most in need of mapping.
+    #[test]
+    fn forcing_the_schema_predicts_a_layout_even_when_a_profile_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let dev = mock_with_schema("Scarlett 2i2 4th Gen-00031337");
+        let ctx =
+            DeviceContext::resolve_at(&dev, true, Some(&dir.path().join("schema.json"))).unwrap();
+
+        assert!(ctx.profile.is_some(), "the 2i2 profile should be detected");
+        assert!(ctx.schema.is_some(), "force_schema should extract");
+        let predicted = ctx
+            .predicted
+            .expect("a profiled device must still get a predicted layout when forced");
+        assert_eq!(predicted.total_leds, 40);
+        assert_eq!(predicted.input_count, 2);
+    }
+
+    /// Without a forced schema a profiled device short-circuits, so there is
+    /// nothing to predict from.
+    #[test]
+    fn a_profiled_device_predicts_nothing_when_the_schema_is_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let dev = mock_with_schema("Scarlett 2i2 4th Gen-00031337");
+        let ctx =
+            DeviceContext::resolve_at(&dev, false, Some(&dir.path().join("schema.json"))).unwrap();
+        assert!(ctx.schema.is_none());
+        assert!(ctx.predicted.is_none());
+    }
+
+    /// `map` forces the schema, and its offsets drive the bulk LED write.
+    /// Before the schema supplied `enableDirectLEDMode`, a Solo got the 2i2's
+    /// 77 — its `directMonitorAltOffset` — instead of 72.
+    #[test]
+    fn solo_forced_schema_supplies_its_own_led_mode_offset() {
+        let dir = tempfile::tempdir().unwrap();
+        let dev = mock_with_name("Scarlett Solo 4th Gen-00031337");
+        dev.serve_schema(include_str!(
+            "../../../docs/device_firmware_schema_solo_2.0.2417.0.json"
+        ));
+        let ctx =
+            DeviceContext::resolve_at(&dev, true, Some(&dir.path().join("schema.json"))).unwrap();
+        assert!(ctx.schema.is_some());
+        assert_eq!(ctx.offsets.enable_direct_led, 72);
+        assert_eq!(ctx.offsets.direct_led_values, 88);
+        assert_eq!(ctx.offsets.direct_led_count, 32);
+        assert_eq!(ctx.offsets.direct_led_colour, 80);
+        assert_eq!(ctx.offsets.selected_input, None);
+    }
+
     #[test]
     fn unknown_model_no_schema_returns_error() {
-        let dev = mock_with_name("Scarlett Solo 4th Gen-00031337");
+        let dev = mock_with_name("Scarlett 4i4 4th Gen-00031337");
         let err = DeviceContext::resolve(&dev, false).unwrap_err();
         assert!(
             err.to_string().contains("Unsupported device"),

@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use focusmute_lib::audio::MuteMonitor;
 use focusmute_lib::config::Config;
 use focusmute_lib::device::{ScarlettDevice, open_device_by_serial};
+use focusmute_lib::models::PanelControls;
 use focusmute_lib::monitor::MonitorAction;
 
 use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
@@ -98,8 +99,9 @@ pub fn run_poll_loop<M: MuteMonitor>(monitor: &M, tx: &mpsc::Sender<Msg>) {
 
 /// Background listener for Direct-button notifications.
 ///
-/// Exists only while the Direct option is on and a Solo is connected, so a
-/// disabled option costs no thread and no device I/O.
+/// Exists only while the Direct option is on and the connected device has
+/// panel controls (a Solo), so a disabled option costs no thread and no
+/// device I/O.
 struct DirectWatcher {
     stop: Arc<AtomicBool>,
     handle: JoinHandle<()>,
@@ -252,6 +254,7 @@ impl DirectGesture {
 /// Classify one device notification from the Direct listener.
 fn handle_direct_notify<M: MuteMonitor>(
     device: &impl ScarlettDevice,
+    panel: &PanelControls,
     monitor: Option<&M>,
     muted: bool,
     window_ms: u64,
@@ -266,20 +269,20 @@ fn handle_direct_notify<M: MuteMonitor>(
         );
         return;
     };
-    if mask & focusmute_lib::direct::SOLO_VIDEO_CALL_NOTIFY_MASK != 0 {
+    if mask & panel.video_call_notify_mask != 0 {
         // A three-second hold is reserved by Solo for Combine Inputs.
         gesture.cancel();
         return;
     }
-    if mask & focusmute_lib::direct::SOLO_DIRECT_NOTIFY_MASK != 0 {
-        match focusmute_lib::direct::solo_direct_enabled(device) {
+    if mask & panel.direct_notify_mask != 0 {
+        match focusmute_lib::direct::direct_enabled(device, panel) {
             Ok(current) => {
                 if let Some(action) = gesture.changed(
                     now,
                     current,
                     Duration::from_millis(window_ms.clamp(200, 600)),
                 ) {
-                    apply_direct_action(device, monitor, muted, gesture, action, now);
+                    apply_direct_action(device, panel, monitor, muted, gesture, action, now);
                 }
             }
             Err(e) => log::warn!("[direct] could not read Direct state: {e}"),
@@ -289,6 +292,7 @@ fn handle_direct_notify<M: MuteMonitor>(
 
 fn apply_direct_action<M: MuteMonitor>(
     device: &impl ScarlettDevice,
+    panel: &PanelControls,
     monitor: Option<&M>,
     muted: bool,
     gesture: &mut DirectGesture,
@@ -305,7 +309,7 @@ fn apply_direct_action<M: MuteMonitor>(
             !baseline
         }
     };
-    if let Err(e) = focusmute_lib::direct::set_solo_direct_enabled(device, desired_direct) {
+    if let Err(e) = focusmute_lib::direct::set_direct_enabled(device, panel, desired_direct) {
         log::warn!("[direct] could not set Direct state: {e}");
         return;
     }
@@ -442,6 +446,15 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
         const MAX_SOUND_BYTES: u64 = 10_000_000;
         let mut all_warnings = parse_warnings;
         all_warnings.extend(sound_warnings);
+        // An unverified LED profile has to reach the user, not just the log.
+        if let Some(w) = state
+            .ctx
+            .as_ref()
+            .and_then(|c| c.profile)
+            .and_then(|p| p.provenance_warning())
+        {
+            all_warnings.push(w);
+        }
         let input_count = state.ctx.as_ref().and_then(|c| c.input_count());
         if let Err(errs) = state.config.validate(input_count, MAX_SOUND_BYTES) {
             for e in &errs {
@@ -554,10 +567,14 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
             }
         }
 
-        // Direct is an opt-in Solo gesture. Its listener thread exists only
-        // while the option is on; notifications arrive as Msg::DirectNotify.
-        let direct_wanted = state.config.hardware_button.direct_button_enabled
-            && device.as_ref().is_some_and(focusmute_lib::direct::is_solo);
+        // Direct is an opt-in gesture on models with panel controls (the
+        // Solo). Its listener thread exists only while the option is on;
+        // notifications arrive as Msg::DirectNotify.
+        let panel = device
+            .as_ref()
+            .and_then(|d| focusmute_lib::models::panel(d.info()))
+            .map(|p| p.controls);
+        let direct_wanted = state.config.hardware_button.direct_button_enabled && panel.is_some();
         sync_direct_watcher(
             &mut direct_watcher,
             &mut direct_last_spawn,
@@ -567,11 +584,14 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
         );
         if !direct_wanted {
             direct_gesture.cancel();
-        } else if let Some(ref dev) = device {
+        } else if let Some(ref dev) = device
+            && let Some(panel) = panel
+        {
             let now = Instant::now();
             if let Some(action) = direct_gesture.tick(now) {
                 apply_direct_action(
                     dev,
+                    panel,
                     main_monitor.as_deref(),
                     state.indicator.is_muted(),
                     &mut direct_gesture,
@@ -648,9 +668,13 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
                 Ok(Msg::DirectNotify(packet)) => {
                     // Direct actions run in this pass; a resulting mute change
                     // arrives as a MutePoll on a following pass.
-                    if direct_wanted && let Some(ref dev) = device {
+                    if direct_wanted
+                        && let Some(ref dev) = device
+                        && let Some(panel) = panel
+                    {
                         handle_direct_notify(
                             dev,
+                            panel,
                             main_monitor.as_deref(),
                             state.indicator.is_muted(),
                             state.config.hardware_button.direct_double_click_ms,

@@ -12,5 +12,6 @@ pub use ops::{
     set_single_led,
 };
 pub use strategy::{
-    IndicatorRenderMode, MuteStrategy, mute_color_or_default, resolve_strategy_from_config,
+    ExtendedIndicator, IndicatorRenderMode, MuteStrategy, mute_color_or_default,
+    resolve_mute_strategy, resolve_strategy_from_config,
 };

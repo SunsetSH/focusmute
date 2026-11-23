@@ -1,100 +1,99 @@
 //! LED device operations — single-LED mute indicator apply/clear/restore.
+//!
+//! Nothing here knows model names. Which LEDs to light comes from the
+//! [`MuteStrategy`] (built from the model profile or a predicted layout), and
+//! where to write them comes from its [`DeviceOffsets`].
 
 use crate::device::{Result, ScarlettDevice};
-use crate::protocol;
+use crate::offsets::DeviceOffsets;
 
 use super::strategy::{IndicatorRenderMode, MuteStrategy};
 
-/// Descriptor fields used by the firmware's single-LED command. The 2i2
-/// values remain the legacy defaults; Solo has a compact APP_SPACE layout.
-fn single_led_fields(device: &impl ScarlettDevice) -> (u32, u32, u32) {
-    if device
-        .info()
-        .model()
-        .eq_ignore_ascii_case("Scarlett Solo 4th Gen")
-    {
-        // Verified from the Solo 4th Gen firmware schema (fw 2.0.2417.0).
-        // colour=80, index=84, notify=8. Do not use 2i2's 84/88 here.
-        (80, 84, 8)
-    } else {
-        (
-            protocol::OFF_DIRECT_LED_COLOUR,
-            protocol::OFF_DIRECT_LED_INDEX,
-            protocol::NOTIFY_DIRECT_LED_COLOUR,
-        )
-    }
-}
-
-fn is_solo(device: &impl ScarlettDevice) -> bool {
-    device
-        .info()
-        .model()
-        .eq_ignore_ascii_case("Scarlett Solo 4th Gen")
-}
-
 // ── Single-LED update (DATA_NOTIFY(8)) ──
 
-/// Set a single LED color via `directLEDColour` + `directLEDIndex` + DATA_NOTIFY(8).
+/// Set a single LED color via `directLEDColour` + `directLEDIndex` + DATA_NOTIFY.
 ///
 /// Updates ONLY the targeted LED — zero side effects on any other LED.
 /// Works in mode 0 (normal metering mode) without any mode change.
 /// Metering continues unaffected on all halo ring segments.
-pub fn set_single_led(device: &impl ScarlettDevice, index: u8, color: u32) -> Result<()> {
-    let (colour_offset, index_offset, notify) = single_led_fields(device);
+///
+/// `offsets` must be the connected device's own, from [`DeviceOffsets`]. The
+/// three fields differ between models (the 2i2 writes colour at 84 and index at
+/// 88; the Solo writes them at 80 and 84), and using another model's values
+/// writes the colour into whatever field sits at that offset instead.
+pub fn set_single_led(
+    device: &impl ScarlettDevice,
+    offsets: &DeviceOffsets,
+    index: u8,
+    color: u32,
+) -> Result<()> {
     // Ordering matters: colour must be written before index.
-    device.set_descriptor(colour_offset, &color.to_le_bytes())?;
-    device.set_descriptor(index_offset, &[index])?;
-    device.data_notify(notify)?;
+    device.set_descriptor(offsets.direct_led_colour, &color.to_le_bytes())?;
+    device.set_descriptor(offsets.direct_led_index, &[index])?;
+    device.data_notify(offsets.direct_led_colour_notify)?;
+    Ok(())
+}
+
+/// The input the firmware currently highlights, or `None` on a model without
+/// a `selectedInput` control. Reading the 2i2's offset on such a device would
+/// return an unrelated field and pick a colour from it.
+fn selected_input(device: &impl ScarlettDevice, offsets: &DeviceOffsets) -> Result<Option<usize>> {
+    let Some(offset) = offsets.selected_input else {
+        return Ok(None);
+    };
+    Ok(Some(
+        device
+            .get_descriptor(offset, 1)?
+            .first()
+            .copied()
+            .unwrap_or(0) as usize,
+    ))
+}
+
+/// Write each number LED back to the colour the firmware shows for it: the
+/// selected input's colour, or the unselected one (white). Models without a
+/// `selectedInput` control return every number to white.
+fn restore_numbers(
+    device: &impl ScarlettDevice,
+    strategy: &MuteStrategy,
+    inputs: &[usize],
+    leds: &[u8],
+) -> Result<()> {
+    let selected = selected_input(device, &strategy.offsets)?;
+    for (&input, &led) in inputs.iter().zip(leds) {
+        let color = if selected == Some(input) {
+            strategy.selected_color
+        } else {
+            strategy.unselected_color
+        };
+        set_single_led(device, &strategy.offsets, led, color)?;
+    }
     Ok(())
 }
 
 /// Restore number LEDs to their firmware-expected colors.
 ///
-/// Reads `selectedInput` from the device to determine which input is currently
-/// selected, then sets each number LED to the appropriate firmware color
-/// (green for selected, off for unselected) via DATA_NOTIFY(8).
+/// Only the numbers FocusMute overrode are written; Air, Direct and the other
+/// panel LEDs stay firmware-owned.
 fn restore_number_leds(device: &impl ScarlettDevice, strategy: &MuteStrategy) -> Result<()> {
-    // Solo has no selectedInput field. Restore only the number LEDs that
-    // FocusMute has overridden; Air, Direct, and other LEDs stay firmware-owned.
-    if is_solo(device) {
-        return super::solo::number_leds(&strategy.input_indices)
-            .into_iter()
-            .try_for_each(|index| set_single_led(device, index, super::solo::WHITE));
-    }
-    let selected_input = device
-        .get_descriptor(protocol::OFF_SELECTED_INPUT, 1)?
-        .first()
-        .copied()
-        .unwrap_or(0) as usize;
-
-    for (input_idx, &led_idx) in strategy
-        .input_indices
-        .iter()
-        .zip(strategy.number_leds.iter())
-    {
-        let color = if *input_idx == selected_input {
-            strategy.selected_color
-        } else {
-            strategy.unselected_color
-        };
-        set_single_led(device, led_idx, color)?;
-    }
-    Ok(())
+    restore_numbers(
+        device,
+        strategy,
+        &strategy.input_indices,
+        &strategy.number_leds,
+    )
 }
 
-/// The Solo direct-LED bulk-array map has not yet been calibrated from the
-/// attached hardware. Keep the normal firmware renderer in control until the
-/// laboratory observations provide a verified map.
+/// Turn the muted number LEDs off — the dark half of a mute blink.
+///
+/// Uses the single-LED path only: the bulk `directLEDValues` array is not
+/// calibrated on every model, and DATA_NOTIFY(5) blanks independent LEDs on
+/// the Solo.
 pub fn blank_mute_indicator(device: &impl ScarlettDevice, strategy: &MuteStrategy) -> Result<()> {
-    if is_solo(device) {
-        return super::solo::number_leds(&strategy.input_indices)
-            .into_iter()
-            .try_for_each(|index| set_single_led(device, index, 0));
-    }
     strategy
         .number_leds
         .iter()
-        .try_for_each(|&index| set_single_led(device, index, 0))
+        .try_for_each(|&index| set_single_led(device, &strategy.offsets, index, 0))
 }
 
 // ── Mute indicator operations ──
@@ -108,38 +107,15 @@ pub fn apply_mute_indicator(
     strategy: &MuteStrategy,
     mute_color: u32,
 ) -> Result<()> {
-    if is_solo(device) {
-        // The observed map supersedes the generic predicted layout (0/8).
-        return strategy
-            .input_indices
-            .iter()
-            .enumerate()
-            .filter_map(|(position, input)| match input {
-                0 => Some((super::solo::INPUT_1_LED, position)),
-                1 => Some((super::solo::INPUT_2_LED, position)),
-                _ => None,
-            })
-            .try_for_each(|(led, position)| {
-                set_single_led(
-                    device,
-                    led,
-                    strategy
-                        .mute_colors
-                        .get(position)
-                        .copied()
-                        .unwrap_or(mute_color),
-                )
-            });
-    }
     for (i, &led_idx) in strategy.number_leds.iter().enumerate() {
         let color = strategy.mute_colors.get(i).copied().unwrap_or(mute_color);
-        set_single_led(device, led_idx, color)?;
+        set_single_led(device, &strategy.offsets, led_idx, color)?;
     }
     Ok(())
 }
 
 /// Apply the selected rendering. Kept separate from the legacy API so all
-/// existing 2i2 callers and integrations retain number-indicator behaviour.
+/// existing callers and integrations retain number-indicator behaviour.
 pub fn apply_mute_indicator_with_mode(
     device: &impl ScarlettDevice,
     strategy: &MuteStrategy,
@@ -149,13 +125,10 @@ pub fn apply_mute_indicator_with_mode(
     match mode {
         IndicatorRenderMode::Extended => apply_extended_indicator(device, strategy, mute_color),
         IndicatorRenderMode::HalosSolid => {
-            if is_solo(device) {
-                log::warn!(
-                    "[led] Solo firmware overwrites halo colours; using the verified number indicator"
-                );
-            } else {
-                log::warn!("[led] solid halos are unsupported; using number LEDs");
-            }
+            // The firmware repaints halo colours from its own meter state
+            // (the Solo overwrites them within a frame), so a solid halo
+            // cannot be held. The numbers are the reliable indicator.
+            log::warn!("[led] solid halos are unsupported; using number LEDs");
             apply_mute_indicator(device, strategy, mute_color)
         }
         IndicatorRenderMode::Numbers
@@ -164,68 +137,35 @@ pub fn apply_mute_indicator_with_mode(
     }
 }
 
-/// Extended indication owns both input number LEDs and both Output indicators.
+/// Extended indication owns every input number LED and the Output indicator,
+/// all in the global mute colour.
 fn apply_extended_indicator(
     device: &impl ScarlettDevice,
     strategy: &MuteStrategy,
     color: u32,
 ) -> Result<()> {
-    if is_solo(device) {
-        return [super::solo::INPUT_1_LED, super::solo::INPUT_2_LED, 24, 25]
-            .into_iter()
-            .try_for_each(|index| set_single_led(device, index, color));
-    }
-    if device
-        .info()
-        .model()
-        .eq_ignore_ascii_case("Scarlett 2i2 4th Gen")
-    {
-        return [0, 8, 37, 38]
-            .into_iter()
-            .try_for_each(|index| set_single_led(device, index, color));
-    }
-    strategy
-        .number_leds
+    let Some(ext) = strategy.extended.as_ref() else {
+        return strategy
+            .number_leds
+            .iter()
+            .try_for_each(|&index| set_single_led(device, &strategy.offsets, index, color));
+    };
+    ext.number_leds
         .iter()
-        .try_for_each(|&index| set_single_led(device, index, color))
+        .chain(&ext.output_leds)
+        .try_for_each(|&index| set_single_led(device, &strategy.offsets, index, color))
 }
 
 fn clear_extended_indicator(device: &impl ScarlettDevice, strategy: &MuteStrategy) -> Result<()> {
-    if is_solo(device) {
-        for index in [super::solo::INPUT_1_LED, super::solo::INPUT_2_LED] {
-            set_single_led(device, index, super::solo::WHITE)?;
-        }
-        return [24, 25]
-            .into_iter()
-            .try_for_each(|index| set_single_led(device, index, super::solo::WHITE));
-    }
-    if device
-        .info()
-        .model()
-        .eq_ignore_ascii_case("Scarlett 2i2 4th Gen")
-    {
-        let selected = device
-            .get_descriptor(protocol::OFF_SELECTED_INPUT, 1)?
-            .first()
-            .copied()
-            .unwrap_or(0) as usize;
-        for (input, led) in [(0, 0), (1, 8)] {
-            set_single_led(
-                device,
-                led,
-                if input == selected {
-                    strategy.selected_color
-                } else {
-                    strategy.unselected_color
-                },
-            )?;
-        }
-        return [37, 38]
-            .into_iter()
-            .try_for_each(|index| set_single_led(device, index, 0x7080_8800));
-    }
-    clear_mute_indicator(device, strategy)
+    let Some(ext) = strategy.extended.as_ref() else {
+        return clear_mute_indicator(device, strategy);
+    };
+    restore_numbers(device, strategy, &ext.input_indices, &ext.number_leds)?;
+    ext.output_leds.iter().try_for_each(|&index| {
+        set_single_led(device, &strategy.offsets, index, ext.output_restore_color)
+    })
 }
+
 /// Clear the mute indicator and restore normal LED state.
 pub fn clear_mute_indicator(device: &impl ScarlettDevice, strategy: &MuteStrategy) -> Result<()> {
     restore_number_leds(device, strategy)
@@ -281,6 +221,8 @@ mod tests {
             mute_colors: vec![],
             selected_color: 0x20FF_0000,
             unselected_color: 0x88FF_FF00,
+            offsets: Default::default(),
+            extended: None,
         }
     }
 
@@ -291,22 +233,140 @@ mod tests {
             mute_colors: vec![],
             selected_color: 0x20FF_0000,
             unselected_color: 0x88FF_FF00,
+            offsets: Default::default(),
+            extended: None,
         }
     }
 
-    fn solo_device() -> MockDevice {
-        let mut dev = MockDevice::new();
-        dev.info_mut().device_name = "Scarlett Solo 4th Gen-TEST".into();
-        dev
+    /// The strategy the tray resolves for a Solo: its profile's numbers and
+    /// offsets, for the given zero-based inputs.
+    fn solo_strategy(inputs: &[usize]) -> MuteStrategy {
+        let profile = crate::models::detect_model("Scarlett Solo 4th Gen").unwrap();
+        let mute_inputs = if inputs.is_empty() {
+            crate::config::MuteInputs::All
+        } else {
+            crate::config::MuteInputs::Specific(inputs.to_vec())
+        };
+        super::super::strategy::resolve_mute_strategy(
+            &mute_inputs,
+            Some(profile),
+            None,
+            0xFF00_0000,
+            &Default::default(),
+            profile.offsets,
+        )
+        .unwrap()
+        .0
     }
 
+    const SOLO_WHITE: u32 = 0xAAFF_DD00;
+
     // ── set_single_led ──
+
+    /// Offsets observed on a Scarlett Solo 4th Gen: the single-LED fields sit
+    /// four bytes earlier than the 2i2's, and the bulk array starts where the
+    /// 2i2 keeps its index field. See docs/13, "Other 4th Gen models".
+    fn compact_layout_offsets() -> DeviceOffsets {
+        DeviceOffsets {
+            direct_led_colour: 80,
+            direct_led_index: 84,
+            direct_led_colour_notify: 8,
+            direct_led_values: 88,
+            direct_led_count: 32,
+            selected_input: None,
+            ..Default::default()
+        }
+    }
+
+    /// Regression: the write path used the 2i2's constants for every model, so
+    /// on a device with a compact APP_SPACE the colour landed in the index
+    /// field and the index in the first bulk-array entry.
+    #[test]
+    fn set_single_led_uses_the_devices_own_offsets() {
+        let dev = MockDevice::new();
+        let offsets = compact_layout_offsets();
+        let color = 0x1234_5600u32;
+
+        set_single_led(&dev, &offsets, 4, color).unwrap();
+
+        let descs = dev.descriptors.borrow();
+        assert_eq!(
+            u32::from_le_bytes(descs.get(&80).unwrap()[..4].try_into().unwrap()),
+            color,
+            "colour must be written at this device's directLEDColour offset"
+        );
+        assert_eq!(descs.get(&84).unwrap(), &[4]);
+        // The 2i2's offsets must not be touched: 84 is this device's index
+        // field (asserted above), and 88 is the start of its bulk array.
+        assert!(
+            !descs.contains_key(&OFF_DIRECT_LED_INDEX),
+            "must not write the 2i2 index offset (88) — it is the bulk array here"
+        );
+        drop(descs);
+        assert_eq!(dev.notifies.borrow().as_slice(), &[8]);
+    }
+
+    /// Regression: restore read `selectedInput` at the 2i2's offset 331 on
+    /// every model. A device without that control has an unrelated field
+    /// there, and whatever byte it held decided the restore colour.
+    #[test]
+    fn restore_without_selected_input_never_reads_the_2i2_offset() {
+        let dev = MockDevice::new();
+        // Seed the 2i2 offset with the value that would mark input 0 selected.
+        // A device with no selectedInput must ignore it.
+        setup_device_with_selected_input(&dev, 0);
+
+        let strategy = MuteStrategy {
+            input_indices: vec![0, 1],
+            number_leds: vec![4, 12],
+            mute_colors: vec![],
+            selected_color: 0x20FF_0000,
+            unselected_color: 0x88FF_FF00,
+            offsets: compact_layout_offsets(),
+            extended: None,
+        };
+
+        clear_mute_indicator(&dev, &strategy).unwrap();
+
+        // Both numbers restore to the unselected colour; neither is green.
+        let descs = dev.descriptors.borrow();
+        assert_eq!(
+            u32::from_le_bytes(descs.get(&80).unwrap()[..4].try_into().unwrap()),
+            strategy.unselected_color,
+            "no selectedInput means no input is highlighted"
+        );
+        assert_eq!(descs.get(&84).unwrap(), &[12]);
+        drop(descs);
+        assert_eq!(dev.notifies.borrow().as_slice(), &[8, 8]);
+    }
+
+    /// The 2i2 keeps its existing behaviour: the selected input goes green.
+    #[test]
+    fn restore_with_selected_input_still_highlights_the_selected_number() {
+        let dev = MockDevice::new();
+        setup_device_with_selected_input(&dev, 1);
+        let strategy = make_strategy_both_inputs();
+
+        clear_mute_indicator(&dev, &strategy).unwrap();
+
+        // Input 2 (index 1) is selected and written last.
+        let descs = dev.descriptors.borrow();
+        assert_eq!(descs.get(&OFF_DIRECT_LED_INDEX).unwrap(), &[8]);
+        assert_eq!(
+            u32::from_le_bytes(
+                descs.get(&OFF_DIRECT_LED_COLOUR).unwrap()[..4]
+                    .try_into()
+                    .unwrap()
+            ),
+            strategy.selected_color
+        );
+    }
 
     #[test]
     fn set_single_led_writes_colour_index_notify() {
         let dev = MockDevice::new();
         let color = 0xFF00_0000u32;
-        set_single_led(&dev, 0, color).unwrap();
+        set_single_led(&dev, &DeviceOffsets::default(), 0, color).unwrap();
 
         let descs = dev.descriptors.borrow();
 
@@ -326,7 +386,7 @@ mod tests {
     #[test]
     fn set_single_led_does_not_touch_mode_or_values() {
         let dev = MockDevice::new();
-        set_single_led(&dev, 0, 0xFF00_0000).unwrap();
+        set_single_led(&dev, &DeviceOffsets::default(), 0, 0xFF00_0000).unwrap();
 
         let descs = dev.descriptors.borrow();
         assert!(!descs.contains_key(&OFF_ENABLE_DIRECT_LED));
@@ -335,8 +395,8 @@ mod tests {
 
     #[test]
     fn solo_single_led_uses_solo_fields_without_2i2_value_field() {
-        let dev = solo_device();
-        set_single_led(&dev, 7, 0x12_34_56_00).unwrap();
+        let dev = MockDevice::new();
+        set_single_led(&dev, &solo_strategy(&[]).offsets, 7, 0x12_34_56_00).unwrap();
 
         let descriptors = dev.descriptors.borrow();
         assert_eq!(
@@ -350,15 +410,11 @@ mod tests {
 
     #[test]
     fn solo_auto_mode_keeps_firmware_halos_and_restores_number_to_white() {
-        let dev = solo_device();
+        let dev = MockDevice::new();
+        let mut strategy = solo_strategy(&[0]);
+        strategy.mute_colors.clear(); // exercise the global-colour fallback
         let color = 0xAA_BB_CC_00;
-        apply_mute_indicator_with_mode(
-            &dev,
-            &make_strategy_one_input(),
-            color,
-            IndicatorRenderMode::Auto,
-        )
-        .unwrap();
+        apply_mute_indicator_with_mode(&dev, &strategy, color, IndicatorRenderMode::Auto).unwrap();
 
         let descriptors = dev.descriptors.borrow();
         assert!(!descriptors.contains_key(&72));
@@ -368,12 +424,11 @@ mod tests {
         drop(descriptors);
         assert_eq!(dev.notifies.borrow().as_slice(), &[8]);
 
-        clear_mute_indicator_with_mode(&dev, &make_strategy_one_input(), IndicatorRenderMode::Auto)
-            .unwrap();
+        clear_mute_indicator_with_mode(&dev, &strategy, IndicatorRenderMode::Auto).unwrap();
         let descriptors = dev.descriptors.borrow();
         assert_eq!(
             descriptors.get(&80),
-            Some(&crate::led::solo::WHITE.to_le_bytes().to_vec())
+            Some(&SOLO_WHITE.to_le_bytes().to_vec())
         );
         assert_eq!(descriptors.get(&84), Some(&vec![4]));
         drop(descriptors);
@@ -382,14 +437,9 @@ mod tests {
 
     #[test]
     fn solo_second_input_and_legacy_halo_config_never_target_air_or_halos() {
-        let dev = solo_device();
-        let strategy = MuteStrategy {
-            input_indices: vec![1],
-            number_leds: vec![8], // A generic prediction must never reach Solo.
-            mute_colors: vec![0x12_34_56_00],
-            selected_color: 0,
-            unselected_color: 0,
-        };
+        let dev = MockDevice::new();
+        let mut strategy = solo_strategy(&[1]);
+        strategy.mute_colors = vec![0x12_34_56_00];
         for mode in [
             IndicatorRenderMode::Auto,
             IndicatorRenderMode::Numbers,
@@ -397,25 +447,52 @@ mod tests {
             IndicatorRenderMode::HalosSolid,
         ] {
             apply_mute_indicator_with_mode(&dev, &strategy, 0xFF00_0000, mode).unwrap();
-            assert_eq!(
-                dev.descriptors.borrow().get(&84),
-                Some(&vec![super::super::solo::INPUT_2_LED])
-            );
+            assert_eq!(dev.descriptors.borrow().get(&84), Some(&vec![12]));
             blank_mute_indicator(&dev, &strategy).unwrap();
-            assert_eq!(
-                dev.descriptors.borrow().get(&84),
-                Some(&vec![super::super::solo::INPUT_2_LED])
-            );
+            assert_eq!(dev.descriptors.borrow().get(&84), Some(&vec![12]));
             assert_eq!(dev.descriptors.borrow().get(&80), Some(&vec![0; 4]));
             clear_mute_indicator_with_mode(&dev, &strategy, mode).unwrap();
-            assert_eq!(
-                dev.descriptors.borrow().get(&84),
-                Some(&vec![super::super::solo::INPUT_2_LED])
-            );
+            assert_eq!(dev.descriptors.borrow().get(&84), Some(&vec![12]));
         }
         assert_eq!(dev.descriptors.borrow().len(), 2);
         assert!(dev.notifies.borrow().iter().all(|&event| event == 8));
         assert_eq!(strategy.input_indices, vec![1]);
+    }
+
+    /// `extended` lights both numbers and the Output LEDs whatever
+    /// `mute_inputs` says, and restores all four to white.
+    #[test]
+    fn solo_extended_owns_both_numbers_and_the_output_indicator() {
+        use crate::device::mock::MockOp;
+        let dev = MockDevice::new();
+        let strategy = solo_strategy(&[0]);
+        apply_mute_indicator_with_mode(&dev, &strategy, 0xFF00_0000, IndicatorRenderMode::Extended)
+            .unwrap();
+        clear_mute_indicator_with_mode(&dev, &strategy, IndicatorRenderMode::Extended).unwrap();
+        let indices: Vec<(u8, u32)> = dev
+            .ops
+            .borrow()
+            .chunks(3)
+            .map(|op| match op {
+                [MockOp::Set(80, c), MockOp::Set(84, i), MockOp::Notify(8)] => {
+                    (i[0], u32::from_le_bytes(c[..4].try_into().unwrap()))
+                }
+                other => panic!("unexpected ops {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            indices,
+            vec![
+                (4, 0xFF00_0000),
+                (12, 0xFF00_0000),
+                (24, 0xFF00_0000),
+                (25, 0xFF00_0000),
+                (4, SOLO_WHITE),
+                (12, SOLO_WHITE),
+                (24, SOLO_WHITE),
+                (25, SOLO_WHITE),
+            ]
+        );
     }
 
     // ── apply_mute_indicator ──
@@ -472,15 +549,14 @@ mod tests {
 
     #[test]
     fn solo_all_inputs_targets_only_both_confirmed_channel_numbers() {
-        let dev = solo_device();
-        apply_mute_indicator(&dev, &make_strategy_both_inputs(), 0xFF00_0000).unwrap();
+        let dev = MockDevice::new();
+        let strategy = solo_strategy(&[]);
+        assert_eq!(strategy.number_leds, vec![4, 12]);
+        apply_mute_indicator(&dev, &strategy, 0xFF00_0000).unwrap();
 
         // MockDevice retains the final single-LED index; two notifications
         // prove both known Solo channel numbers were issued, with no halo write.
-        assert_eq!(
-            dev.descriptors.borrow().get(&84),
-            Some(&vec![super::super::solo::INPUT_2_LED])
-        );
+        assert_eq!(dev.descriptors.borrow().get(&84), Some(&vec![12]));
         assert_eq!(dev.notifies.borrow().as_slice(), &[8, 8]);
     }
 
@@ -493,6 +569,8 @@ mod tests {
             mute_colors: vec![0x00FF_0000, 0x0000_FF00],
             selected_color: 0x20FF_0000,
             unselected_color: 0x88FF_FF00,
+            offsets: Default::default(),
+            extended: None,
         };
 
         apply_mute_indicator(&dev, &strategy, 0xFF00_0000).unwrap();
@@ -676,7 +754,7 @@ mod tests {
         let dev = MockDevice::new();
         dev.fail_set_descriptor.set(true);
 
-        let result = set_single_led(&dev, 0, 0xFF00_0000);
+        let result = set_single_led(&dev, &DeviceOffsets::default(), 0, 0xFF00_0000);
         assert!(result.is_err(), "should propagate set_descriptor error");
     }
 
@@ -685,7 +763,7 @@ mod tests {
         let dev = MockDevice::new();
         dev.fail_data_notify.set(true);
 
-        let result = set_single_led(&dev, 0, 0xFF00_0000);
+        let result = set_single_led(&dev, &DeviceOffsets::default(), 0, 0xFF00_0000);
         assert!(result.is_err(), "should propagate data_notify error");
     }
 }

@@ -74,6 +74,7 @@ fn indicator(ctx: &DeviceContext, mode: &str, inputs: &str, colours: bool) -> Mu
         ctx.input_count(),
         ctx.profile,
         ctx.predicted.as_ref(),
+        &ctx.offsets,
     )
     .unwrap();
     let mut indicator = MuteIndicator::new(2, false, led::mute_color_or_default(&config), strategy);
@@ -176,22 +177,26 @@ fn record() -> String {
 // their offsets move into the model profile. Only these adapters follow.
 
 fn direct_set(dev: &MockDevice, _ctx: &DeviceContext, enabled: bool) -> Result<(), String> {
-    focusmute_lib::direct::set_solo_direct_enabled(dev, enabled).map_err(|e| e.to_string())
+    match focusmute_lib::models::panel(dev.info()) {
+        Some(panel) => focusmute_lib::direct::set_direct_enabled(dev, panel.controls, enabled)
+            .map_err(|e| e.to_string()),
+        None => Ok(()),
+    }
 }
 
 fn direct_read(dev: &MockDevice, _ctx: &DeviceContext) -> Option<bool> {
-    if !focusmute_lib::direct::is_solo(dev) {
-        return None;
-    }
-    focusmute_lib::direct::solo_direct_enabled(dev).ok()
+    let panel = focusmute_lib::models::panel(dev.info())?;
+    focusmute_lib::direct::direct_enabled(dev, panel.controls).ok()
 }
 
 fn lab_test(dev: &MockDevice, _ctx: &DeviceContext, index: u8, color: u32) -> Result<(), String> {
-    led::solo::test_led(dev, index, color).map_err(|e| e.to_string())
+    let panel = focusmute_lib::models::panel(dev.info());
+    led::solo::test_led(dev, panel, index, color).map_err(|e| e.to_string())
 }
 
 fn lab_restore(dev: &MockDevice, _ctx: &DeviceContext, inputs: &[usize]) -> Result<(), String> {
-    led::solo::restore_test(dev, inputs).map_err(|e| e.to_string())
+    let panel = focusmute_lib::models::panel(dev.info());
+    led::solo::restore_test(dev, panel, inputs).map_err(|e| e.to_string())
 }
 
 #[test]

@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use crate::config::{Config, MuteInputs};
 use crate::layout::{LedZone, PredictedLayout};
 use crate::models::{self, ModelProfile};
+use crate::offsets::DeviceOffsets;
 
 use super::color::parse_color;
 
@@ -31,6 +32,11 @@ impl IndicatorRenderMode {
     }
 }
 
+/// Warning shown when the LED indices come from prediction rather than a
+/// confirmed profile. The predictor assumes input LEDs start at index 0, which
+/// is wrong on at least the Scarlett Solo 4th Gen — `map` settles it.
+const PREDICTED_LAYOUT_WARNING: &str = "using predicted LED layout (no hardcoded profile); run `focusmute-cli map` to verify the LED indices";
+
 /// Resolved mute visualization strategy.
 ///
 /// Targets specific input number LEDs via single-LED update (DATA_NOTIFY(8)).
@@ -50,6 +56,56 @@ pub struct MuteStrategy {
     pub selected_color: u32,
     /// Firmware color for unselected input number LEDs (for restore).
     pub unselected_color: u32,
+    /// Descriptor offsets for this device's LED write path. Resolved from the
+    /// firmware schema, so the single-LED command lands on the right fields for
+    /// models whose APP_SPACE layout differs from the 2i2's.
+    pub offsets: DeviceOffsets,
+    /// LEDs owned by the `extended` render mode, from the model profile.
+    /// `None` without a profile or an Output indicator: `extended` then
+    /// renders the number LEDs above.
+    pub extended: Option<ExtendedIndicator>,
+}
+
+/// The `extended` render mode: every input number plus the Output indicator,
+/// regardless of which inputs `mute_inputs` selects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtendedIndicator {
+    /// 0-indexed inputs, paired with `number_leds` for the selected-input restore.
+    pub input_indices: Vec<usize>,
+    pub number_leds: Vec<u8>,
+    pub output_leds: Vec<u8>,
+    /// Colour that returns the Output LEDs to the firmware's look.
+    pub output_restore_color: u32,
+}
+
+/// Every input number LED of a profile, in input order.
+fn profile_number_leds(profile: &ModelProfile) -> Result<Vec<u8>, String> {
+    profile
+        .input_halos
+        .iter()
+        .enumerate()
+        .map(|(i, h)| {
+            u8::try_from(h.number_led).map_err(|_| {
+                format!(
+                    "number_led {} exceeds u8 range for input {}",
+                    h.number_led,
+                    i + 1
+                )
+            })
+        })
+        .collect()
+}
+
+fn extended_from_profile(profile: &ModelProfile) -> Result<Option<ExtendedIndicator>, String> {
+    let Some(output) = profile.output_indicator.as_ref() else {
+        return Ok(None);
+    };
+    Ok(Some(ExtendedIndicator {
+        input_indices: (0..profile.input_halos.len()).collect(),
+        number_leds: profile_number_leds(profile)?,
+        output_leds: output.leds.to_vec(),
+        output_restore_color: output.restore_color,
+    }))
 }
 
 /// Extract number LED indices from a predicted layout.
@@ -89,26 +145,14 @@ pub fn resolve_mute_strategy(
     predicted: Option<&PredictedLayout>,
     mute_color: u32,
     input_colors: &HashMap<String, String>,
+    offsets: &DeviceOffsets,
 ) -> Result<(MuteStrategy, Option<String>), String> {
     match mute_inputs {
         MuteInputs::All => {
             if let Some(profile) = profile {
                 // Known device: target all input number LEDs via DATA_NOTIFY(8).
                 let input_indices: Vec<usize> = (0..profile.input_halos.len()).collect();
-                let number_leds: Vec<u8> = profile
-                    .input_halos
-                    .iter()
-                    .enumerate()
-                    .map(|(i, h)| {
-                        u8::try_from(h.number_led).map_err(|_| {
-                            format!(
-                                "number_led {} exceeds u8 range for input {}",
-                                h.number_led,
-                                i + 1
-                            )
-                        })
-                    })
-                    .collect::<Result<Vec<u8>, String>>()?;
+                let number_leds = profile_number_leds(profile)?;
                 let mute_colors = build_mute_colors(&input_indices, mute_color, input_colors);
                 Ok((
                     MuteStrategy {
@@ -117,8 +161,10 @@ pub fn resolve_mute_strategy(
                         mute_colors,
                         selected_color: profile.number_led_selected,
                         unselected_color: profile.number_led_unselected,
+                        offsets: offsets.clone(),
+                        extended: extended_from_profile(profile)?,
                     },
-                    None,
+                    profile.provenance_warning(),
                 ))
             } else if let Some(predicted) = predicted {
                 // Unknown device with schema: use predicted number LED indices.
@@ -136,8 +182,10 @@ pub fn resolve_mute_strategy(
                         mute_colors,
                         selected_color: models::DEFAULT_NUMBER_LED_SELECTED,
                         unselected_color: models::DEFAULT_NUMBER_LED_UNSELECTED,
+                        offsets: offsets.clone(),
+                        extended: None,
                     },
-                    Some("using predicted LED layout (no hardcoded profile)".into()),
+                    Some(PREDICTED_LAYOUT_WARNING.into()),
                 ))
             } else {
                 Err("unknown device with no schema; cannot determine number LED indices".into())
@@ -176,8 +224,10 @@ pub fn resolve_mute_strategy(
                         mute_colors,
                         selected_color: profile.number_led_selected,
                         unselected_color: profile.number_led_unselected,
+                        offsets: offsets.clone(),
+                        extended: extended_from_profile(profile)?,
                     },
-                    None,
+                    profile.provenance_warning(),
                 ))
             } else if let Some(predicted) = predicted {
                 let (all_indices, all_leds) = number_leds_from_predicted(predicted)?;
@@ -204,8 +254,10 @@ pub fn resolve_mute_strategy(
                         mute_colors,
                         selected_color: models::DEFAULT_NUMBER_LED_SELECTED,
                         unselected_color: models::DEFAULT_NUMBER_LED_UNSELECTED,
+                        offsets: offsets.clone(),
+                        extended: None,
                     },
-                    Some("using predicted LED layout (no hardcoded profile)".into()),
+                    Some(PREDICTED_LAYOUT_WARNING.into()),
                 ))
             } else {
                 Err("per-input mute requires a known model profile or schema; \
@@ -257,6 +309,7 @@ pub fn resolve_strategy_from_config(
     input_count: Option<usize>,
     profile: Option<&ModelProfile>,
     predicted: Option<&PredictedLayout>,
+    offsets: &DeviceOffsets,
 ) -> Result<(MuteInputs, MuteStrategy, Vec<String>), String> {
     let mut warnings = Vec::new();
     if let Some(ic) = input_count
@@ -273,6 +326,7 @@ pub fn resolve_strategy_from_config(
         predicted,
         mute_color,
         &config.indicator.input_colors,
+        offsets,
     )?;
     if let Some(w) = strategy_warning {
         warnings.push(w);
@@ -293,6 +347,66 @@ mod tests {
 
     // ── resolve_mute_strategy ──
 
+    /// The Solo profile was measured on this project's own device: it resolves
+    /// to the observed numbers, no selected input, the Output indicator for
+    /// `extended`, and no provenance warning.
+    #[test]
+    fn the_solo_profile_resolves_to_its_observed_numbers() {
+        let profile = models::detect_model("Scarlett Solo 4th Gen").unwrap();
+        let (strategy, warning) = resolve_mute_strategy(
+            &MuteInputs::All,
+            Some(profile),
+            None,
+            RED,
+            &no_input_colors(),
+            profile.offsets,
+        )
+        .unwrap();
+
+        assert_eq!(strategy.number_leds, vec![4, 12]);
+        assert_eq!(strategy.offsets.selected_input, None);
+        assert_eq!(strategy.offsets.direct_led_colour, 80);
+        assert_eq!(warning, None);
+        let extended = strategy.extended.expect("Solo has an Output indicator");
+        assert_eq!(extended.number_leds, vec![4, 12]);
+        assert_eq!(extended.output_leds, vec![24, 25]);
+        assert_eq!(extended.output_restore_color, 0xAAFF_DD00);
+    }
+
+    /// A predicted layout knows no Output indicator, so `extended` falls back
+    /// to the numbers there.
+    #[test]
+    fn a_predicted_layout_has_no_extended_indicator() {
+        let json = include_str!("../../../../docs/device_firmware_schema_solo_2.0.2417.0.json");
+        let sc = crate::schema::parse_schema(json).unwrap();
+        let predicted = crate::layout::predict_layout(&sc).unwrap();
+        let (strategy, _) = resolve_mute_strategy(
+            &MuteInputs::All,
+            None,
+            Some(&predicted),
+            RED,
+            &no_input_colors(),
+            &DeviceOffsets::from_schema(&sc),
+        )
+        .unwrap();
+        assert!(strategy.extended.is_none());
+    }
+
+    #[test]
+    fn a_verified_profile_resolves_without_a_warning() {
+        let profile = models::detect_model("Scarlett 2i2 4th Gen").unwrap();
+        let (_strategy, warning) = resolve_mute_strategy(
+            &MuteInputs::All,
+            Some(profile),
+            None,
+            RED,
+            &no_input_colors(),
+            profile.offsets,
+        )
+        .unwrap();
+        assert_eq!(warning, None);
+    }
+
     #[test]
     fn resolve_all_with_profile_returns_per_input_all() {
         let profile = models::detect_model("Scarlett 2i2 4th Gen").unwrap();
@@ -302,6 +416,7 @@ mod tests {
             None,
             RED,
             &no_input_colors(),
+            &DeviceOffsets::default(),
         )
         .unwrap();
         assert!(warning.is_none());
@@ -314,7 +429,14 @@ mod tests {
 
     #[test]
     fn resolve_all_no_profile_no_predicted_returns_error() {
-        let result = resolve_mute_strategy(&MuteInputs::All, None, None, RED, &no_input_colors());
+        let result = resolve_mute_strategy(
+            &MuteInputs::All,
+            None,
+            None,
+            RED,
+            &no_input_colors(),
+            &DeviceOffsets::default(),
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("unknown device"));
     }
@@ -328,6 +450,7 @@ mod tests {
             Some(&predicted),
             RED,
             &no_input_colors(),
+            &DeviceOffsets::default(),
         )
         .unwrap();
         assert!(warning.is_some());
@@ -350,6 +473,7 @@ mod tests {
             None,
             RED,
             &no_input_colors(),
+            &DeviceOffsets::default(),
         )
         .unwrap();
         assert!(warning.is_none());
@@ -367,6 +491,7 @@ mod tests {
             None,
             RED,
             &no_input_colors(),
+            &DeviceOffsets::default(),
         )
         .unwrap();
         assert!(warning.is_none());
@@ -383,6 +508,7 @@ mod tests {
             None,
             RED,
             &no_input_colors(),
+            &DeviceOffsets::default(),
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("out of range"));
@@ -396,6 +522,7 @@ mod tests {
             None,
             RED,
             &no_input_colors(),
+            &DeviceOffsets::default(),
         );
         assert!(result.is_err());
     }
@@ -409,6 +536,7 @@ mod tests {
             Some(&predicted),
             RED,
             &no_input_colors(),
+            &DeviceOffsets::default(),
         )
         .unwrap();
         assert!(warning.is_some());
@@ -423,9 +551,15 @@ mod tests {
             ("1".into(), "#00FF00".into()), // green for input 1
             ("2".into(), "#0000FF".into()), // blue for input 2
         ]);
-        let (strategy, warning) =
-            resolve_mute_strategy(&MuteInputs::All, Some(profile), None, RED, &input_colors)
-                .unwrap();
+        let (strategy, warning) = resolve_mute_strategy(
+            &MuteInputs::All,
+            Some(profile),
+            None,
+            RED,
+            &input_colors,
+            &DeviceOffsets::default(),
+        )
+        .unwrap();
         assert!(warning.is_none());
         // Input 1 → green (0x00FF0000 in RGBW), Input 2 → blue (0x0000FF00 in RGBW)
         assert_eq!(strategy.mute_colors[0], parse_color("#00FF00").unwrap());
@@ -437,9 +571,15 @@ mod tests {
         let profile = models::detect_model("Scarlett 2i2 4th Gen").unwrap();
         // Only input 2 has a custom color
         let input_colors = HashMap::from([("2".into(), "#00FF00".into())]);
-        let (strategy, _) =
-            resolve_mute_strategy(&MuteInputs::All, Some(profile), None, RED, &input_colors)
-                .unwrap();
+        let (strategy, _) = resolve_mute_strategy(
+            &MuteInputs::All,
+            Some(profile),
+            None,
+            RED,
+            &input_colors,
+            &DeviceOffsets::default(),
+        )
+        .unwrap();
         assert_eq!(strategy.mute_colors[0], RED); // falls back to global
         assert_eq!(strategy.mute_colors[1], parse_color("#00FF00").unwrap());
     }
@@ -448,9 +588,15 @@ mod tests {
     fn resolve_per_input_invalid_custom_color_falls_back_to_global() {
         let profile = models::detect_model("Scarlett 2i2 4th Gen").unwrap();
         let input_colors = HashMap::from([("1".into(), "not-a-color".into())]);
-        let (strategy, _) =
-            resolve_mute_strategy(&MuteInputs::All, Some(profile), None, RED, &input_colors)
-                .unwrap();
+        let (strategy, _) = resolve_mute_strategy(
+            &MuteInputs::All,
+            Some(profile),
+            None,
+            RED,
+            &input_colors,
+            &DeviceOffsets::default(),
+        )
+        .unwrap();
         assert_eq!(strategy.mute_colors[0], RED); // invalid → falls back to global
         assert_eq!(strategy.mute_colors[1], RED);
     }
@@ -478,8 +624,14 @@ mod tests {
         let mut config = Config::load();
         config.indicator.mute_inputs = "all".into();
         let profile = models::detect_model("Scarlett 2i2 4th Gen").unwrap();
-        let (mode, strategy, warnings) =
-            resolve_strategy_from_config(&mut config, Some(2), Some(profile), None).unwrap();
+        let (mode, strategy, warnings) = resolve_strategy_from_config(
+            &mut config,
+            Some(2),
+            Some(profile),
+            None,
+            &DeviceOffsets::default(),
+        )
+        .unwrap();
         assert!(matches!(mode, MuteInputs::All));
         assert_eq!(strategy.input_indices, &[0, 1]);
         assert!(warnings.is_empty());
@@ -489,7 +641,13 @@ mod tests {
     fn resolve_strategy_all_inputs_no_profile_no_predicted_returns_error() {
         let mut config = Config::load();
         config.indicator.mute_inputs = "all".into();
-        let result = resolve_strategy_from_config(&mut config, Some(2), None, None);
+        let result = resolve_strategy_from_config(
+            &mut config,
+            Some(2),
+            None,
+            None,
+            &DeviceOffsets::default(),
+        );
         assert!(result.is_err());
     }
 
@@ -498,8 +656,14 @@ mod tests {
         let mut config = Config::load();
         config.indicator.mute_inputs = "5".into(); // out of range for 2 inputs
         let profile = models::detect_model("Scarlett 2i2 4th Gen").unwrap();
-        let (mode, strategy, warnings) =
-            resolve_strategy_from_config(&mut config, Some(2), Some(profile), None).unwrap();
+        let (mode, strategy, warnings) = resolve_strategy_from_config(
+            &mut config,
+            Some(2),
+            Some(profile),
+            None,
+            &DeviceOffsets::default(),
+        )
+        .unwrap();
         assert!(matches!(mode, MuteInputs::All));
         assert_eq!(strategy.input_indices, &[0, 1]);
         assert!(!warnings.is_empty());
@@ -512,8 +676,14 @@ mod tests {
         let mut config = Config::load();
         config.indicator.mute_inputs = "all".into();
         let predicted = make_predicted_layout(2);
-        let (mode, strategy, warnings) =
-            resolve_strategy_from_config(&mut config, Some(2), None, Some(&predicted)).unwrap();
+        let (mode, strategy, warnings) = resolve_strategy_from_config(
+            &mut config,
+            Some(2),
+            None,
+            Some(&predicted),
+            &DeviceOffsets::default(),
+        )
+        .unwrap();
         assert!(matches!(mode, MuteInputs::All));
         assert_eq!(strategy.input_indices, &[0, 1]);
         assert!(!warnings.is_empty()); // "using predicted" warning

@@ -9,6 +9,7 @@ use focusmute_lib::config::Config;
 use focusmute_lib::device::{PlatformDevice, ScarlettDevice, open_device_by_serial};
 use focusmute_lib::led;
 use focusmute_lib::meter;
+use focusmute_lib::models::Panel;
 use global_hotkey::{GlobalHotKeyEvent, HotKeyState, hotkey::HotKey};
 #[cfg(windows)]
 use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
@@ -487,7 +488,9 @@ impl SettingsApp {
         ctx.request_repaint_after(Duration::from_millis(90));
     }
 
-    fn led_lab_device(&mut self) -> Result<&PlatformDevice, String> {
+    /// The device and its panel controls. Only a Solo on a verified firmware
+    /// layout has them, so the Lab cannot write to any other device.
+    fn led_lab_device(&mut self) -> Result<(&PlatformDevice, Panel), String> {
         if self.meter_device.is_none() {
             self.meter_device = open_device_by_serial(&self.original.system.device_serial).ok();
         }
@@ -495,17 +498,18 @@ impl SettingsApp {
             .meter_device
             .as_ref()
             .ok_or_else(|| "The Scarlett device is not available.".to_string())?;
-        if !focusmute_lib::direct::is_solo(device) {
-            return Err("LED Lab is available only for Scarlett Solo 4th Gen.".into());
-        }
-        Ok(device)
+        let panel = focusmute_lib::models::panel(device.info()).ok_or_else(|| {
+            "LED Lab is available only for Scarlett Solo 4th Gen on a verified firmware."
+                .to_string()
+        })?;
+        Ok((device, panel))
     }
 
     fn led_lab_reset(&mut self) {
         let result = (|| {
             let inputs = self.active_input_indices();
-            let device = self.led_lab_device()?;
-            led::solo::restore_test(device, &inputs).map_err(|e| e.to_string())?;
+            let (device, panel) = self.led_lab_device()?;
+            led::solo::restore_test(device, Some(panel), &inputs).map_err(|e| e.to_string())?;
             Ok::<_, String>(
                 "Selected channel numbers restored to white; DATA_NOTIFY(8). Bulk array unchanged."
                     .into(),
@@ -523,10 +527,12 @@ impl SettingsApp {
         let result = (|| {
             let color = led::parse_color(&self.color_text).map_err(|e| e.to_string())?;
             let index = self.led_lab_index;
-            let device = self.led_lab_device()?;
-            led::solo::test_led(device, index, color).map_err(|e| e.to_string())?;
+            let (device, panel) = self.led_lab_device()?;
+            led::solo::test_led(device, Some(panel), index, color).map_err(|e| e.to_string())?;
+            let o = panel.offsets;
             Ok::<_, String>(format!(
-                "Single LED: color=80, index=84 ({index}), DATA_NOTIFY(8), color={color:#010X}."
+                "Single LED: color={}, index={} ({index}), DATA_NOTIFY({}), color={color:#010X}.",
+                o.direct_led_colour, o.direct_led_index, o.direct_led_colour_notify
             ))
         })();
         self.led_lab_result = result.unwrap_or_else(|error| format!("Error: {error}"));
@@ -534,13 +540,13 @@ impl SettingsApp {
 
     fn led_lab_snapshot(&mut self) {
         let result = (|| {
-            let device = self.led_lab_device()?;
-            let mode = device.get_descriptor(72, 1).map_err(|e| e.to_string())?;
-            let direct = device.get_descriptor(264, 1).map_err(|e| e.to_string())?;
-            let values = device.get_descriptor(88, 128).map_err(|e| e.to_string())?;
-            let air = device.get_descriptor(62, 1).map_err(|e| e.to_string())?;
+            let (device, panel) = self.led_lab_device()?;
+            let (mode, air, direct, values) =
+                led::solo::snapshot(device, Some(panel)).map_err(|e| e.to_string())?;
+            let (o, c) = (panel.offsets, panel.controls);
             let mut text = format!(
-                "READ ONLY: mode[72]={mode:02X?}; Air[62]={air:02X?}; Direct[264]={direct:02X?}\nCommand buffer (NOT measured panel colours), slots[88]:"
+                "READ ONLY: mode[{}]=[{mode:02X}]; Air[{}]=[{air:02X}]; Direct[{}]=[{direct:02X}]\nCommand buffer (NOT measured panel colours), slots[{}]:",
+                o.enable_direct_led, c.input_air, c.direct_monitoring, o.direct_led_values
             );
             for (index, raw) in values.as_chunks::<4>().0.iter().enumerate() {
                 let color = u32::from_le_bytes(*raw);
@@ -639,7 +645,11 @@ impl Drop for SettingsApp {
     fn drop(&mut self) {
         if self.led_lab_touched
             && let Some(device) = &self.meter_device
-            && let Err(error) = led::solo::restore_test(device, &self.active_input_indices())
+            && let Err(error) = led::solo::restore_test(
+                device,
+                focusmute_lib::models::panel(device.info()),
+                &self.active_input_indices(),
+            )
         {
             log::warn!("[led-lab] could not restore test indicator: {error}");
         }
