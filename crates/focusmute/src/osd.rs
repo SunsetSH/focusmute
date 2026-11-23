@@ -1,5 +1,6 @@
 //! On-screen mute indicator: a small click-through banner shown for
-//! [`SHOW_FOR`] when the mute state changes or the user talks while muted.
+//! [`SHOW_FOR_MS`] when the mute state changes or the user talks while muted,
+//! on the monitor showing the foreground window.
 //!
 //! Windows only, drawn with plain GDI on a layered popup window. Nothing is
 //! created until the first [`Osd::show`], and [`Osd::destroy`] releases the
@@ -55,24 +56,61 @@ mod win {
     const CORNER: i32 = 16;
     const OPACITY: u8 = 230;
 
-    /// Scale a 96-DPI length to the system DPI. A DPI-unaware process gets 96,
-    /// so the banner looks the same whether or not eframe has already made the
+    /// Scale a 96-DPI length to `dpi`. A DPI-unaware process is told 96, so
+    /// the banner looks the same whether or not eframe has already made the
     /// process DPI-aware by opening the settings window.
-    fn px(value: i32) -> i32 {
-        let dpi = unsafe { windows::Win32::UI::HiDpi::GetDpiForSystem() } as i32;
+    fn px(value: i32, dpi: i32) -> i32 {
         value * dpi.max(96) / 96
     }
 
-    /// Text and colour for the next `WM_PAINT`. The window lives on the main
-    /// thread only, so thread-local storage is enough.
+    /// Where the banner goes: the work area and DPI of the monitor showing the
+    /// foreground window, so a full-screen game on a second monitor sees it.
+    #[derive(Clone, Copy, PartialEq)]
+    struct Placement {
+        area: RECT,
+        dpi: i32,
+    }
+
+    fn placement() -> Placement {
+        use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+        unsafe {
+            let monitor = MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTOPRIMARY);
+            let mut info = MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            let area = if GetMonitorInfoW(monitor, &mut info).as_bool() {
+                info.rcWork
+            } else {
+                RECT {
+                    left: 0,
+                    top: 0,
+                    right: GetSystemMetrics(SM_CXSCREEN),
+                    bottom: GetSystemMetrics(SM_CYSCREEN),
+                }
+            };
+            let (mut dpi_x, mut dpi_y) = (96u32, 96u32);
+            if GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y).is_err() {
+                dpi_x = windows::Win32::UI::HiDpi::GetDpiForSystem();
+            }
+            Placement {
+                area,
+                dpi: dpi_x as i32,
+            }
+        }
+    }
+
+    /// Text, colour and DPI for the next `WM_PAINT`. The window lives on the
+    /// main thread only, so thread-local storage is enough.
     struct PaintState {
         text: Vec<u16>,
         background: COLORREF,
+        dpi: i32,
     }
 
     thread_local! {
         static PAINT: RefCell<PaintState> = const {
-            RefCell::new(PaintState { text: Vec::new(), background: COLORREF(0) })
+            RefCell::new(PaintState { text: Vec::new(), background: COLORREF(0), dpi: 96 })
         };
         static CLASS_REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
@@ -96,10 +134,10 @@ mod win {
         (crate::i18n::tr(language, key), color)
     }
 
-    fn create_font() -> HFONT {
+    fn create_font(dpi: i32) -> HFONT {
         unsafe {
             CreateFontW(
-                px(FONT_HEIGHT),
+                px(FONT_HEIGHT, dpi),
                 0,
                 0,
                 0,
@@ -133,7 +171,7 @@ mod win {
                     let brush = CreateSolidBrush(state.background);
                     FillRect(hdc, &rect, brush);
                     let _ = DeleteObject(brush.into());
-                    let font = create_font();
+                    let font = create_font(state.dpi);
                     let old = SelectObject(hdc, font.into());
                     SetBkMode(hdc, TRANSPARENT);
                     SetTextColor(hdc, rgb(255, 255, 255));
@@ -184,11 +222,11 @@ mod win {
         true
     }
 
-    /// Width of `text` in the OSD font, in pixels.
-    fn text_width(text: &[u16]) -> i32 {
+    /// Width of `text` in the OSD font at `dpi`, in pixels.
+    fn text_width(text: &[u16], dpi: i32) -> i32 {
         unsafe {
             let hdc = GetDC(None);
-            let font = create_font();
+            let font = create_font(dpi);
             let old = SelectObject(hdc, font.into());
             let mut size = SIZE::default();
             let _ = GetTextExtentPoint32W(hdc, text, &mut size);
@@ -199,26 +237,10 @@ mod win {
         }
     }
 
-    /// Top-left corner for a `width`×[`HEIGHT`] banner on the primary work area.
-    fn origin(position: &str, width: i32) -> (i32, i32) {
-        let mut area = RECT::default();
-        let ok = unsafe {
-            SystemParametersInfoW(
-                SPI_GETWORKAREA,
-                0,
-                Some(&mut area as *mut RECT as *mut _),
-                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
-            )
-        };
-        if ok.is_err() {
-            area = RECT {
-                left: 0,
-                top: 0,
-                right: unsafe { GetSystemMetrics(SM_CXSCREEN) },
-                bottom: unsafe { GetSystemMetrics(SM_CYSCREEN) },
-            };
-        }
-        let (margin, height) = (px(MARGIN), px(HEIGHT));
+    /// Top-left corner for a `width`×[`HEIGHT`] banner in `place`'s work area.
+    fn origin(position: &str, width: i32, place: Placement) -> (i32, i32) {
+        let area = place.area;
+        let (margin, height) = (px(MARGIN, place.dpi), px(HEIGHT, place.dpi));
         let left = area.left + margin;
         let right = area.right - margin - width;
         let top = area.top + margin;
@@ -235,8 +257,9 @@ mod win {
 
     pub struct Osd {
         hwnd: Option<HWND>,
-        /// What the visible banner shows, to skip a repaint on a repeat.
-        shown: Option<OsdKind>,
+        /// What the visible banner shows and where, to skip a repaint on a
+        /// repeat. A new monitor, position or language lays it out again.
+        shown: Option<(OsdKind, Placement, String)>,
     }
 
     impl Osd {
@@ -295,16 +318,20 @@ mod win {
                 return;
             };
             let visible = unsafe { IsWindowVisible(hwnd) }.as_bool();
-            if !(visible && self.shown == Some(kind)) {
+            let place = placement();
+            let key = (kind, place, format!("{language}/{position}"));
+            if !(visible && self.shown.as_ref() == Some(&key)) {
+                let dpi = place.dpi;
                 let (text, background) = style(kind, language);
                 let text: Vec<u16> = text.encode_utf16().collect();
-                let width = text_width(&text) + px(PADDING_X) * 2;
-                let height = px(HEIGHT);
-                let corner = px(CORNER);
-                let (x, y) = origin(position, width);
+                let width = text_width(&text, dpi) + px(PADDING_X, dpi) * 2;
+                let height = px(HEIGHT, dpi);
+                let corner = px(CORNER, dpi);
+                let (x, y) = origin(position, width, place);
                 PAINT.with_borrow_mut(|state| {
                     state.text = text;
                     state.background = background;
+                    state.dpi = dpi;
                 });
                 unsafe {
                     // The region is owned by the window after SetWindowRgn.
@@ -321,7 +348,7 @@ mod win {
                     );
                     let _ = InvalidateRect(Some(hwnd), None, true);
                 }
-                self.shown = Some(kind);
+                self.shown = Some(key);
             }
             // Re-arming an existing timer id replaces its interval.
             unsafe { SetTimer(Some(hwnd), HIDE_TIMER, SHOW_FOR_MS, None) };

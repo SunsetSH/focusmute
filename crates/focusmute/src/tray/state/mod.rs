@@ -115,6 +115,16 @@ pub fn set_autostart(enabled: bool) {
     }
 }
 
+/// Point an enabled autostart entry at this executable. A portable EXE that
+/// was moved would otherwise leave the login entry on the old path.
+pub fn refresh_autostart() {
+    if let Some(al) = get_auto_launch()
+        && let Err(e) = al.enable()
+    {
+        log::warn!("[autostart] could not refresh the login entry: {e}");
+    }
+}
+
 // ── Shared helpers ──
 
 /// Resolve the mute strategy from the current config and optional device context.
@@ -475,6 +485,8 @@ pub fn handle_menu_event(
             info,
             settings_toggle_callback,
         ) {
+            let previous_hotkey = state.config.keyboard.hotkey.clone();
+            let previous_ptt = state.config.keyboard.push_to_talk_hotkey.clone();
             let changes = state.handle_settings_result(new_config, device.as_ref());
             menu.sync_language(&state.config, device.is_some(), state.indicator.is_muted());
             for w in &changes.warnings {
@@ -498,22 +510,37 @@ pub fn handle_menu_event(
                 .0;
             }
 
-            if changes.toggle_changed {
-                if reregister_toggle(&mut resources.hotkey, &changes.new_toggle_str) {
-                    menu.toggle_item
-                        .set_text(format!("Toggle Mute\t{}", changes.new_toggle_str));
-                } else {
-                    crate::notification::Notifier::show_oneshot(&format!(
-                        "Could not register hotkey \"{}\". It may be in use by another application.",
-                        changes.new_toggle_str,
-                    ));
-                }
+            // The config keeps only shortcuts that are actually registered:
+            // saving one that failed would fail again on every start. The
+            // menu label already shows the new toggle via sync_language.
+            let mut reverted = false;
+            if changes.toggle_changed
+                && !reregister_toggle(&mut resources.hotkey, &changes.new_toggle_str)
+            {
+                crate::notification::Notifier::show_oneshot(&format!(
+                    "Could not register hotkey \"{}\". It may be in use by another application. Keeping \"{previous_hotkey}\".",
+                    changes.new_toggle_str,
+                ));
+                state.config.keyboard.hotkey = previous_hotkey;
+                reverted = true;
             }
             if changes.ptt_changed && !reregister_ptt(&mut resources.hotkey, &changes.new_ptt_str) {
                 crate::notification::Notifier::show_oneshot(&format!(
                     "Could not register push-to-talk hotkey \"{}\". It may be in use by another application.",
                     changes.new_ptt_str,
                 ));
+                // The failed attempt dropped the old PTT registration.
+                if !reregister_ptt(&mut resources.hotkey, &previous_ptt) {
+                    log::warn!("[hotkey] could not restore push-to-talk \"{previous_ptt}\"");
+                }
+                state.config.keyboard.push_to_talk_hotkey = previous_ptt;
+                reverted = true;
+            }
+            if reverted {
+                if let Err(e) = state.config.save() {
+                    log::warn!("[config] could not save the restored hotkeys: {e}");
+                }
+                menu.sync_language(&state.config, device.is_some(), state.indicator.is_muted());
             }
             if changes.log_level_changed {
                 log::info!("[settings] log level changing to {}", changes.new_log_level);

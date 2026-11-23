@@ -511,6 +511,9 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
 
     // Init audio/hotkey resources
     let (mut resources, sound_warnings) = TrayResources::init(&state.config)?;
+    if state.config.system.autostart {
+        state::refresh_autostart();
+    }
 
     // Build tray menu and icon
     let device_connected = device.is_some();
