@@ -79,12 +79,22 @@ const LOOP_BUSY: Duration = Duration::from_millis(50);
 /// background messages) wakes the loop early, so this is only a fallback.
 const LOOP_IDLE: Duration = Duration::from_millis(500);
 
+/// One mute sample. The generation is read first: if it is already the
+/// current one, the state read after it belongs to that microphone.
+fn mute_sample<M: MuteMonitor>(monitor: &M) -> Msg {
+    let generation = monitor.generation();
+    monitor.refresh();
+    Msg::MutePoll {
+        muted: monitor.is_muted(),
+        generation,
+    }
+}
+
 /// Body of the platform mute poll threads.
 pub fn run_poll_loop<M: MuteMonitor>(monitor: &M, tx: &mpsc::Sender<Msg>) {
     while crate::RUNNING.load(Ordering::SeqCst) {
         let woke = monitor.wait_for_change(POLL_IDLE);
-        monitor.refresh();
-        if tx.send(Msg::MutePoll(monitor.is_muted())).is_err() {
+        if tx.send(mute_sample(monitor)).is_err() {
             break;
         }
         if !woke {
@@ -94,8 +104,7 @@ pub fn run_poll_loop<M: MuteMonitor>(monitor: &M, tx: &mpsc::Sender<Msg>) {
         }
         super::wake::wake_main();
         std::thread::sleep(POLL_CONFIRM);
-        monitor.refresh();
-        if tx.send(Msg::MutePoll(monitor.is_muted())).is_err() {
+        if tx.send(mute_sample(monitor)).is_err() {
             break;
         }
         super::wake::wake_main();
@@ -287,6 +296,11 @@ impl MuteIntent {
         }
     }
 
+    /// Drop the pending request: it was made to another microphone.
+    fn forget(&self) {
+        self.target.set(None);
+    }
+
     /// Ask the monitor for `muted` and remember the request.
     fn request<M: MuteMonitor + ?Sized>(
         &self,
@@ -296,40 +310,6 @@ impl MuteIntent {
         monitor.set_muted(muted)?;
         self.target.set(Some((muted, Instant::now())));
         Ok(())
-    }
-}
-
-/// Polls of the previous microphone that may still be queued after a switch.
-///
-/// The poll thread samples every 250 ms while the idle loop drains every
-/// 500 ms, so two old samples can wait in the channel. After the switch was
-/// adopted silently they would pass the debouncer as a fake transition (a
-/// beep), and the next new sample as a second one. Until a sample reports the
-/// adopted state, or a second passes, a disagreeing sample is discarded.
-struct StalePolls {
-    adopted: Option<(bool, Instant)>,
-}
-
-impl StalePolls {
-    const WINDOW: Duration = Duration::from_secs(1);
-
-    fn new() -> Self {
-        Self { adopted: None }
-    }
-
-    fn adopted(&mut self, muted: bool) {
-        self.adopted = Some((muted, Instant::now()));
-    }
-
-    /// Whether `polled` belongs to the microphone watched before the switch.
-    fn is_stale(&mut self, polled: bool) -> bool {
-        match self.adopted {
-            Some((adopted, at)) if at.elapsed() < Self::WINDOW && polled != adopted => true,
-            _ => {
-                self.adopted = None;
-                false
-            }
-        }
     }
 }
 
@@ -365,12 +345,16 @@ fn adopt_mute_state(
 struct MicTracking {
     /// The microphone was muted before FocusMute watched it; see the exit path.
     preexisting_mute: bool,
-    stale_polls: StalePolls,
+    /// The last mute command, until the monitor confirms it.
+    intent: MuteIntent,
+    /// The user was told the switch to a new default microphone failed.
+    stale_notified: bool,
 }
 
 /// Follow a change of the Windows default microphone: adopt its state
-/// silently and drop queued samples of the previous one. `retry_now` retries
-/// a failed switch at once, before a command is sent.
+/// silently. Queued samples of the previous one carry an older generation and
+/// are dropped where they are drained. `retry_now` retries a failed switch at
+/// once, before a command is sent.
 fn follow_default_mic<M: MuteMonitor + ?Sized>(
     monitor: &M,
     retry_now: bool,
@@ -386,14 +370,14 @@ fn follow_default_mic<M: MuteMonitor + ?Sized>(
     let muted = monitor.is_muted();
     state.mic_name = monitor.device_name();
     mic.preexisting_mute = muted;
+    mic.intent.forget();
     adopt_mute_state(state, device, tray, tray_menu, muted);
-    mic.stale_polls.adopted(muted);
 }
 
 /// Tell the user once per stale period why a command did nothing.
-fn report_stale_mic<M: MuteMonitor + ?Sized>(monitor: &M, notified: &mut bool) {
-    if monitor.is_stale() && !*notified {
-        *notified = true;
+fn report_stale_mic<M: MuteMonitor + ?Sized>(monitor: &M, mic: &mut MicTracking) {
+    if monitor.is_stale() && !mic.stale_notified {
+        mic.stale_notified = true;
         crate::notification::Notifier::show_oneshot(
             "Windows switched the default microphone, but it is not ready yet. FocusMute keeps trying.",
         );
@@ -575,7 +559,8 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
     // FocusMute did not mute it. Any confirmed transition clears this.
     let mut mic = MicTracking {
         preexisting_mute: initial_muted,
-        stale_polls: StalePolls::new(),
+        intent: MuteIntent::new(),
+        stale_notified: false,
     };
     log::info!(
         "[mute] initial state: {}",
@@ -691,9 +676,7 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
     let mut direct_last_spawn: Option<Instant> = None;
     // No window exists until the first banner is shown.
     let mut osd = crate::osd::Osd::new();
-    let intent = MuteIntent::new();
     let mut no_mic_notified = false;
-    let mut stale_notified = false;
 
     loop {
         if !RUNNING.load(Ordering::SeqCst) {
@@ -734,7 +717,7 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
                 &mut mic,
             );
             if !m.is_stale() {
-                stale_notified = false;
+                mic.stale_notified = false;
             }
         }
 
@@ -814,7 +797,9 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
                     main_monitor.as_deref(),
                     main_monitor
                         .as_deref()
-                        .map_or(state.indicator.is_muted(), |m| intent.current(m.is_muted())),
+                        .map_or(state.indicator.is_muted(), |m| {
+                            mic.intent.current(m.is_muted())
+                        }),
                     &mut direct_gesture,
                     action,
                     now,
@@ -829,8 +814,13 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
         let mut browser_mute_target: Option<bool> = None;
         loop {
             match rx.try_recv() {
-                Ok(Msg::MutePoll(muted)) => {
-                    if mic.stale_polls.is_stale(muted) {
+                Ok(Msg::MutePoll { muted, generation }) => {
+                    // Queued before a switch: it describes the previous
+                    // microphone and would pass as a mute or unmute.
+                    if main_monitor
+                        .as_ref()
+                        .is_some_and(|m| m.generation() != generation)
+                    {
                         log::debug!("[mute] dropped a poll of the previous microphone");
                         continue;
                     }
@@ -907,7 +897,7 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
                             main_monitor
                                 .as_deref()
                                 .map_or(state.indicator.is_muted(), |m| {
-                                    intent.current(m.is_muted())
+                                    mic.intent.current(m.is_muted())
                                 }),
                             state.config.hardware_button.direct_double_click_ms,
                             &mut direct_gesture,
@@ -932,6 +922,19 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
             poll_thread_dead = true;
         }
         if let Some(muted) = browser_mute_target {
+            if let Some(ref m) = main_monitor
+                && m.is_stale()
+            {
+                follow_default_mic(
+                    &**m,
+                    true,
+                    &mut state,
+                    device.as_ref(),
+                    &tray,
+                    &tray_menu,
+                    &mut mic,
+                );
+            }
             handle_browser_mute(
                 main_monitor.as_deref(),
                 muted,
@@ -1007,6 +1010,22 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
 
         // 4. Menu events
         while let Ok(event) = menu_rx.try_recv() {
+            let is_toggle = event.id() == tray_menu.toggle_item.id();
+            if is_toggle
+                && let Some(ref m) = main_monitor
+                && m.is_stale()
+            {
+                follow_default_mic(
+                    &**m,
+                    true,
+                    &mut state,
+                    device.as_ref(),
+                    &tray,
+                    &tray_menu,
+                    &mut mic,
+                );
+            }
+            let intent = &mic.intent;
             let toggle_mute = |_shown_muted: bool| {
                 if let Some(ref m) = main_monitor
                     && let Err(e) = intent.request(&**m, !intent.current(m.is_muted()))
@@ -1034,6 +1053,9 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
                 &toggle_mute,
                 settings_toggle_callback,
             );
+            if is_toggle && let Some(ref m) = main_monitor {
+                report_stale_mic(&**m, &mut mic);
+            }
             if quit {
                 RUNNING.store(false, Ordering::SeqCst);
                 break;
@@ -1058,7 +1080,8 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
             };
             // A command is about to go out: if Windows moved the default
             // microphone and the switch failed, try it now rather than in 2 s.
-            if event.state == HotKeyState::Pressed && m.is_stale() {
+            // A PTT release counts too: it re-mutes.
+            if m.is_stale() {
                 follow_default_mic(
                     &**m,
                     true,
@@ -1076,26 +1099,31 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
                 }
                 ptt_active = false;
                 ptt_noop_logged = false;
-                let target_muted = !intent.current(m.is_muted());
+                let target_muted = !mic.intent.current(m.is_muted());
                 log::info!(
                     "[hotkey] toggle → {}",
                     if target_muted { "muting" } else { "unmuting" }
                 );
-                if let Err(e) = intent.request(&**m, target_muted) {
+                if let Err(e) = mic.intent.request(&**m, target_muted) {
                     log::warn!("[hotkey] failed to set mute state: {e}");
-                    report_stale_mic(&**m, &mut stale_notified);
+                    report_stale_mic(&**m, &mut mic);
                 }
             } else if resources.hotkey.ptt_id.is_some_and(|id| event.id == id) {
                 // PTT hotkey: press = unmute (if muted), release = re-mute (if PTT activated)
                 match event.state {
                     HotKeyState::Pressed => {
-                        if intent.current(m.is_muted()) {
-                            ptt_active = true;
+                        if mic.intent.current(m.is_muted()) {
                             ptt_noop_logged = false;
                             log::info!("[ptt] held → unmuting");
-                            if let Err(e) = intent.request(&**m, false) {
-                                log::warn!("[ptt] failed to unmute: {e}");
-                                report_stale_mic(&**m, &mut stale_notified);
+                            // Only an unmute that went out is undone on
+                            // release; otherwise release would mute a
+                            // microphone PTT never touched.
+                            match mic.intent.request(&**m, false) {
+                                Ok(()) => ptt_active = true,
+                                Err(e) => {
+                                    log::warn!("[ptt] failed to unmute: {e}");
+                                    report_stale_mic(&**m, &mut mic);
+                                }
                             }
                         } else if !ptt_noop_logged {
                             ptt_noop_logged = true;
@@ -1106,8 +1134,9 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
                         if ptt_active {
                             ptt_active = false;
                             log::info!("[ptt] released → re-muting");
-                            if let Err(e) = intent.request(&**m, true) {
+                            if let Err(e) = mic.intent.request(&**m, true) {
                                 log::warn!("[ptt] failed to re-mute: {e}");
+                                report_stale_mic(&**m, &mut mic);
                             }
                         }
                     }
@@ -1187,7 +1216,7 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
         if mic.preexisting_mute {
             log::info!("[mute] left muted on exit: it was muted before FocusMute");
         } else {
-            match monitor.set_muted(false) {
+            match monitor.unmute_on_exit() {
                 Ok(()) => log::info!("[mute] unmuted on exit"),
                 Err(e) => log::warn!("[mute] failed to unmute on exit: {e}"),
             }
@@ -1205,10 +1234,6 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
     Ok(())
 }
 
-/// Apply a (coalesced) browser-sync target, then reconcile the suppression flag.
-///
-/// `committed_muted` is the debouncer's confirmed (displayed) mute state — the
-/// synchronous source of truth for whether a UI transition will fire, unlike
 /// Perform a blink LED action: the off-phase blanks the indicator's number
 /// LEDs, the solid phase repaints the regular mute indicator. Failures are
 /// debug-logged only — a missed blink frame is cosmetic, and device loss is
@@ -1229,6 +1254,10 @@ fn apply_blink_action(
     }
 }
 
+/// Apply a (coalesced) browser-sync target, then reconcile the suppression flag.
+///
+/// `committed_muted` is the debouncer's confirmed (displayed) mute state — the
+/// synchronous source of truth for whether a UI transition will fire, unlike
 /// the monitor's callback-cached `is_muted()` which lags `set_muted`.
 ///
 /// `browser_sync_pending` is armed to suppress the beep of a browser-caused UI
@@ -1366,22 +1395,42 @@ mod tests {
         assert!(!intent.current(false), "changed elsewhere afterwards");
     }
 
+    /// A request to the previous microphone says nothing about the new one:
+    /// the next toggle starts from the new microphone's state.
     #[test]
-    fn stale_polls_are_dropped_until_the_new_state_is_seen() {
-        let mut stale = StalePolls::new();
-        assert!(!stale.is_stale(true), "nothing adopted yet");
-        stale.adopted(false);
-        assert!(stale.is_stale(true), "queued sample of the old microphone");
-        assert!(stale.is_stale(true));
-        assert!(!stale.is_stale(false), "first sample of the new one");
-        assert!(!stale.is_stale(true), "a real change after that counts");
+    fn a_switch_forgets_the_pending_request() {
+        let intent = MuteIntent::new();
+        intent.request(&LaggyMonitor::new(false), true).unwrap();
+        intent.forget();
+        assert!(!intent.current(false));
     }
 
+    /// Samples carry the generation read before the state, so the main loop
+    /// can drop the ones taken before a switch.
     #[test]
-    fn stale_poll_filter_expires() {
-        let mut stale = StalePolls::new();
-        stale.adopted = Some((false, Instant::now() - StalePolls::WINDOW));
-        assert!(!stale.is_stale(true));
+    fn mute_samples_carry_the_monitor_generation() {
+        struct Switched;
+        impl MuteMonitor for Switched {
+            fn is_muted(&self) -> bool {
+                true
+            }
+            fn set_muted(&self, _muted: bool) -> focusmute_lib::audio::Result<()> {
+                Ok(())
+            }
+            fn wait_for_change(&self, _timeout: Duration) -> bool {
+                false
+            }
+            fn generation(&self) -> u64 {
+                3
+            }
+        }
+        assert!(matches!(
+            mute_sample(&Switched),
+            Msg::MutePoll {
+                muted: true,
+                generation: 3
+            }
+        ));
     }
 
     /// A failed command is not remembered: the next toggle starts again
@@ -1586,8 +1635,8 @@ mod tests {
         let start = Instant::now();
         let second = rx.recv_timeout(Duration::from_secs(1)).unwrap();
         let gap = start.elapsed();
-        assert!(matches!(first, Msg::MutePoll(true)));
-        assert!(matches!(second, Msg::MutePoll(true)));
+        assert!(matches!(first, Msg::MutePoll { muted: true, .. }));
+        assert!(matches!(second, Msg::MutePoll { muted: true, .. }));
         assert!(gap < POLL_IDLE, "confirming sample took {gap:?}");
         drop(rx);
         handle.join().unwrap();

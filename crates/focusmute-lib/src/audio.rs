@@ -49,6 +49,18 @@ pub trait MuteMonitor {
     fn is_stale(&self) -> bool {
         false
     }
+    /// Which microphone the monitor watches: bumped by every switch
+    /// [`maintain`](Self::maintain) reports. A sample taken under an older
+    /// generation describes the previous microphone.
+    fn generation(&self) -> u64 {
+        0
+    }
+    /// Unmute the microphone being watched on exit. Unlike
+    /// [`set_muted`](Self::set_muted) this also works while the monitor is
+    /// stale: it undoes FocusMute's own mute of the microphone it watched.
+    fn unmute_on_exit(&self) -> Result<()> {
+        self.set_muted(false)
+    }
     /// Friendly name of the microphone being watched, if known.
     fn device_name(&self) -> Option<String> {
         None
@@ -89,7 +101,7 @@ fn wait_on_signal(
 #[cfg(windows)]
 mod wasapi {
     use super::*;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, Condvar, Mutex};
     use std::time::Duration;
 
@@ -267,6 +279,8 @@ mod wasapi {
         /// Windows announces the change before every endpoint is ready, so
         /// one failure must not leave the monitor on the old microphone.
         retry_at: Mutex<Option<std::time::Instant>>,
+        /// See [`MuteMonitor::generation`].
+        generation: AtomicU64,
     }
 
     // COM pointers are Send-safe with proper initialization per thread.
@@ -313,12 +327,26 @@ mod wasapi {
                     default_changed,
                     device_client,
                     retry_at: Mutex::new(None),
+                    generation: AtomicU64::new(0),
                 })
             }
         }
 
         pub fn device_name(&self) -> Option<String> {
             self.endpoint.lock().ok()?.device_name.clone()
+        }
+
+        fn set_endpoint_muted(&self, muted: bool) -> Result<()> {
+            let endpoint = self
+                .endpoint
+                .lock()
+                .map_err(|e| AudioError::OperationFailed(format!("endpoint mutex: {e}")))?;
+            unsafe {
+                endpoint
+                    .volume
+                    .SetMute(muted, std::ptr::null())
+                    .map_err(|e| AudioError::OperationFailed(format!("SetMute: {e}")))
+            }
         }
     }
 
@@ -333,16 +361,15 @@ mod wasapi {
                     "the new default microphone is not available yet".into(),
                 ));
             }
-            let endpoint = self
-                .endpoint
-                .lock()
-                .map_err(|e| AudioError::OperationFailed(format!("endpoint mutex: {e}")))?;
-            unsafe {
-                endpoint
-                    .volume
-                    .SetMute(muted, std::ptr::null())
-                    .map_err(|e| AudioError::OperationFailed(format!("SetMute: {e}")))
-            }
+            self.set_endpoint_muted(muted)
+        }
+
+        fn unmute_on_exit(&self) -> Result<()> {
+            self.set_endpoint_muted(false)
+        }
+
+        fn generation(&self) -> u64 {
+            self.generation.load(Ordering::SeqCst)
         }
 
         fn wait_for_change(&self, timeout: Duration) -> bool {
@@ -380,6 +407,14 @@ mod wasapi {
                     );
                     // Dropping the old endpoint unregisters its callback.
                     *endpoint = new_endpoint;
+                    // The old callback could still have stored the previous
+                    // microphone's state; read the new one once it is gone.
+                    if let Ok(now) = unsafe { endpoint.volume.GetMute() } {
+                        self.muted.store(now.as_bool(), Ordering::SeqCst);
+                    }
+                    // After the state above: a sample of this generation
+                    // describes the new microphone.
+                    self.generation.fetch_add(1, Ordering::SeqCst);
                     // Wake the poll thread so the new mic's state is reported.
                     if let Ok(mut changed) = self.signal.0.lock() {
                         *changed = true;

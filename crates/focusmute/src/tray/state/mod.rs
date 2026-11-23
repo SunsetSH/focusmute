@@ -90,7 +90,12 @@ impl TrayResources {
 // ── Messages from background thread ──
 
 pub enum Msg {
-    MutePoll(bool),
+    /// A mute sample, taken while the monitor was on `generation`
+    /// (see [`MuteMonitor::generation`](focusmute_lib::audio::MuteMonitor::generation)).
+    MutePoll {
+        muted: bool,
+        generation: u64,
+    },
     BrowserMute(bool),
     /// Raw device notification packet from the Direct-button listener.
     DirectNotify(Vec<u8>),
