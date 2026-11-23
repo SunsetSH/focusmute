@@ -37,8 +37,16 @@ pub trait MuteMonitor {
     ///
     /// Returns `true` when the monitor now watches a different microphone,
     /// whose mute state the caller should adopt without treating it as a
-    /// mute or unmute.
-    fn maintain(&self) -> bool {
+    /// mute or unmute. `retry_now` retries a failed switch at once instead of
+    /// waiting for its next scheduled attempt; a command is about to be sent.
+    fn maintain(&self, retry_now: bool) -> bool {
+        let _ = retry_now;
+        false
+    }
+    /// Whether Windows moved the default microphone and the monitor could not
+    /// follow yet. [`set_muted`](Self::set_muted) refuses then rather than
+    /// muting the microphone that is no longer the default.
+    fn is_stale(&self) -> bool {
         false
     }
     /// Friendly name of the microphone being watched, if known.
@@ -320,6 +328,11 @@ mod wasapi {
         }
 
         fn set_muted(&self, muted: bool) -> Result<()> {
+            if self.is_stale() {
+                return Err(AudioError::OperationFailed(
+                    "the new default microphone is not available yet".into(),
+                ));
+            }
             let endpoint = self
                 .endpoint
                 .lock()
@@ -340,14 +353,18 @@ mod wasapi {
             WasapiMonitor::device_name(self)
         }
 
-        fn maintain(&self) -> bool {
+        fn is_stale(&self) -> bool {
+            self.retry_at.lock().is_ok_and(|r| r.is_some())
+        }
+
+        fn maintain(&self, retry_now: bool) -> bool {
             /// Gap between attempts to open a default microphone that failed.
             const RETRY: Duration = Duration::from_secs(2);
 
             let Ok(mut retry_at) = self.retry_at.lock() else {
                 return false;
             };
-            let retry_due = retry_at.is_some_and(|at| std::time::Instant::now() >= at);
+            let retry_due = retry_at.is_some_and(|at| retry_now || std::time::Instant::now() >= at);
             if !self.default_changed.swap(false, Ordering::SeqCst) && !retry_due {
                 return false;
             }

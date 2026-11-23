@@ -31,7 +31,8 @@ Windows review in docs/23 and docs/24.
 - `focusmute-cli map` on a Solo wrote the LED mode to the 2i2's offset 77, which on the Solo is `directMonitorAltOffset`; it now uses the schema's 72
 - Without a capture device at startup (autostart before the audio driver) FocusMute stayed without a microphone until restart; the monitor is now retried, and a failed switch to a new default microphone is retried too
 - Two hotkey presses before the first was confirmed sent the same command twice
-- A Focusrite arrival now triggers an immediate reconnect; a stale removal event no longer drops a fresh handle; a context failure after opening keeps the reconnect backoff. Without a device the loop sleeps until the next attempt instead of waking every 50 ms
+- A Focusrite arrival now triggers an immediate reconnect. A removal event is checked against the open handle (its descriptor header must still name the device), so an event for another interface or an earlier session no longer drops a working handle, and a real unplug during a reconnect is still caught. A context failure after opening keeps the reconnect backoff. Without a device the loop sleeps until the next attempt instead of waking every 50 ms
+- When Windows moves the default microphone and FocusMute cannot open it yet, commands are refused instead of muting the microphone that is no longer the default; a hotkey retries the switch at once and says why if it still fails
 - A shortcut that fails to register is not saved, and a failed push-to-talk change keeps the old one
 - With autostart on, the login entry follows a moved portable EXE
 - udev rules file: removed a UTF-8 BOM and a joined comment line

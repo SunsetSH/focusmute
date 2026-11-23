@@ -1391,6 +1391,24 @@ pub fn open_device() -> Result<PlatformDevice> {
     PlatformDevice::open()
 }
 
+/// Whether `device` still answers as the device it was opened as: its
+/// descriptor header reads back and names it.
+///
+/// A Windows removal notification names no device, so it can belong to
+/// another Focusrite interface or to a session already replaced. This tells
+/// those apart from the loss of this handle; a removed interface fails the
+/// read, and a reply that is not this device's header does not count.
+pub fn still_present(device: &impl ScarlettDevice) -> bool {
+    let Ok(hdr) = device.get_descriptor(0, HEADER_LEN) else {
+        return false;
+    };
+    let mut probe = device.info().clone();
+    probe.device_name.clear();
+    probe.header_layout = HeaderLayout::Unknown;
+    probe.apply_header(&hdr);
+    probe.header_layout != HeaderLayout::Unknown && probe.device_name == device.info().device_name
+}
+
 /// Open a device matching the given serial number.
 ///
 /// If `serial` is empty, delegates to [`open_device`] (auto-select).
@@ -1854,6 +1872,32 @@ mod tests {
             FirmwareVersion::from_version_bytes(&[]).to_string(),
             "0.0.0.0"
         );
+    }
+
+    // ── still_present ──
+
+    #[test]
+    fn still_present_when_the_header_names_this_device() {
+        let mut dev = mock::MockDevice::new();
+        dev.info_mut().device_name = "Scarlett 2i2 4th Gen-0003186a".into();
+        dev.set_descriptor(0, &header_fw2()).unwrap();
+        assert!(still_present(&dev));
+    }
+
+    /// The mock answers zeros where nothing was written: no product name,
+    /// so it must not count as the device answering.
+    #[test]
+    fn not_present_without_a_readable_header() {
+        let dev = mock::MockDevice::new();
+        assert!(!still_present(&dev));
+    }
+
+    #[test]
+    fn not_present_when_another_device_answers() {
+        let mut dev = mock::MockDevice::new();
+        dev.info_mut().device_name = "Scarlett Solo 4th Gen-000171cf".into();
+        dev.set_descriptor(0, &header_fw2()).unwrap();
+        assert!(!still_present(&dev));
     }
 
     // ── DeviceInfo::apply_header ──
