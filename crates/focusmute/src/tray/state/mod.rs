@@ -162,6 +162,8 @@ pub struct TrayState {
     pub indicator: MuteIndicator,
     pub reconnect: ReconnectState,
     pub ctx: Option<DeviceContext>,
+    /// Friendly name of the microphone the mute applies to, for the tooltip.
+    pub mic_name: Option<String>,
 }
 
 impl TrayState {
@@ -195,6 +197,7 @@ impl TrayState {
             indicator,
             reconnect: ReconnectState::with_defaults(),
             ctx: Some(ctx),
+            mic_name: None,
         })
     }
 
@@ -227,6 +230,7 @@ impl TrayState {
             indicator,
             reconnect: ReconnectState::with_defaults(),
             ctx: None,
+            mic_name: None,
         }
     }
 
@@ -301,7 +305,13 @@ impl TrayState {
                     Some(dev)
                 }
                 Err(e) => {
-                    log::warn!("[device] could not resolve context on first connect: {e}");
+                    // The open succeeded and reset the backoff; without this
+                    // the next heavy attempt would follow on the next pass.
+                    self.reconnect.record_failure();
+                    log::warn!(
+                        "[device] could not resolve context on connect: {e} (retry in {:.1}s)",
+                        self.reconnect.current_delay().as_secs_f64()
+                    );
                     None
                 }
             }

@@ -23,8 +23,13 @@ use crate::RUNNING;
 /// device interface is removed.  Checked (and cleared) by the main loop.
 static DEVICE_REMOVED: AtomicBool = AtomicBool::new(false);
 
+/// Set when a Focusrite device interface appears, so a reconnect can be
+/// tried at once instead of after the backoff.
+static DEVICE_ARRIVED: AtomicBool = AtomicBool::new(false);
+
 // WM_DEVICECHANGE constants (not always exposed by the windows crate).
 const WM_DEVICECHANGE: u32 = 0x0219;
+const DBT_DEVICEARRIVAL: usize = 0x8000;
 const DBT_DEVICEREMOVECOMPLETE: usize = 0x8004;
 const DBT_DEVTYP_DEVICEINTERFACE: u32 = 5;
 
@@ -42,21 +47,25 @@ struct DevBroadcastDeviceInterface {
 /// Window procedure for the hidden hotplug-notification window.
 ///
 /// SAFETY: Called by the Windows message loop with valid parameters.
-/// Only touches a static `AtomicBool` (lock-free, no aliasing concerns).
+/// Only touches static `AtomicBool`s (lock-free, no aliasing concerns).
 unsafe extern "system" fn device_wndproc(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    if msg == WM_DEVICECHANGE && wparam.0 == DBT_DEVICEREMOVECOMPLETE {
-        DEVICE_REMOVED.store(true, Ordering::SeqCst);
+    if msg == WM_DEVICECHANGE {
+        match wparam.0 {
+            DBT_DEVICEREMOVECOMPLETE => DEVICE_REMOVED.store(true, Ordering::SeqCst),
+            DBT_DEVICEARRIVAL => DEVICE_ARRIVED.store(true, Ordering::SeqCst),
+            _ => {}
+        }
     }
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
 /// Create a hidden message-only window and register it for Focusrite
-/// device-interface removal notifications.
+/// device-interface arrival and removal notifications.
 fn setup_device_notifications() {
     use std::mem;
 
@@ -195,6 +204,10 @@ impl PlatformAdapter for WindowsAdapter {
 
     fn check_device_removed() -> bool {
         DEVICE_REMOVED.swap(false, Ordering::SeqCst)
+    }
+
+    fn check_device_arrived() -> bool {
+        DEVICE_ARRIVED.swap(false, Ordering::SeqCst)
     }
 }
 

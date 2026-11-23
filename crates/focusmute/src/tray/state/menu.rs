@@ -11,16 +11,29 @@ use crate::sound;
 
 // ── Tray icon helpers ──
 
-/// Update the tray icon and tooltip in one call (both are best-effort).
-pub fn set_tray_mute_state(tray: &tray_icon::TrayIcon, muted: bool) {
-    // Tooltip is intentionally compact; detailed localized state is in menu.
-    if muted {
-        tray.set_icon(Some(icon_muted())).ok();
-        tray.set_tooltip(Some("FocusMute — Muted")).ok();
+/// Tooltip naming the state and, when known, the microphone it applies to.
+/// Windows truncates tooltips at 127 characters, so a long name is cut.
+fn mute_tooltip(muted: bool, mic: Option<&str>, connected: bool) -> String {
+    let mut text = String::from(if muted {
+        "FocusMute — Muted"
     } else {
-        tray.set_icon(Some(icon_live())).ok();
-        tray.set_tooltip(Some("FocusMute — Live")).ok();
+        "FocusMute — Live"
+    });
+    if let Some(mic) = mic.filter(|m| !m.is_empty()) {
+        text.push_str(" · ");
+        text.extend(mic.chars().take(64));
     }
+    if !connected {
+        text.push_str(" · Scarlett disconnected");
+    }
+    text
+}
+
+/// Update the tray icon and tooltip in one call (both are best-effort).
+pub fn set_tray_mute_state(tray: &tray_icon::TrayIcon, muted: bool, mic: Option<&str>) {
+    tray.set_icon(Some(if muted { icon_muted() } else { icon_live() }))
+        .ok();
+    tray.set_tooltip(Some(mute_tooltip(muted, mic, true))).ok();
 }
 
 // ── Shared menu construction ──
@@ -175,9 +188,10 @@ pub(crate) fn show_startup_warnings(warnings: &[String]) {
 
 /// Apply mute-state UI updates to the tray icon and status item.
 ///
-/// When `device_connected` is false, all UI/sound/notification updates are
-/// suppressed — the audio interface is unplugged so the input states are
-/// meaningless.
+/// The mute belongs to the Windows microphone, so sound, notification and
+/// hooks follow it even while the Scarlett is unplugged. Only the icon and
+/// the status item keep showing the disconnected device then; the tooltip
+/// still names the state.
 pub fn apply_mute_ui(
     action: MonitorAction,
     tray: &tray_icon::TrayIcon,
@@ -187,16 +201,23 @@ pub fn apply_mute_ui(
     device_connected: bool,
     suppress_sound: bool,
 ) {
-    if !device_connected {
-        return;
-    }
     let play_sound = state.config.sound.sound_enabled && !suppress_sound;
+    let show = |muted: bool| {
+        if device_connected {
+            set_tray_mute_state(tray, muted, state.mic_name.as_deref());
+            menu.status_item.set_text(crate::i18n::tr(
+                &state.config.system.language,
+                if muted { "muted" } else { "live" },
+            ));
+        } else {
+            tray.set_tooltip(Some(mute_tooltip(muted, state.mic_name.as_deref(), false)))
+                .ok();
+        }
+    };
     match action {
         MonitorAction::ApplyMute => {
             log::info!("[mute] muted");
-            set_tray_mute_state(tray, true);
-            menu.status_item
-                .set_text(crate::i18n::tr(&state.config.system.language, "muted"));
+            show(true);
             if play_sound {
                 sound::play_sound(&resources.mute_sound, state.config.sound.mute_sound_volume);
             }
@@ -206,9 +227,7 @@ pub fn apply_mute_ui(
         }
         MonitorAction::ClearMute => {
             log::info!("[mute] unmuted");
-            set_tray_mute_state(tray, false);
-            menu.status_item
-                .set_text(crate::i18n::tr(&state.config.system.language, "live"));
+            show(false);
             if play_sound {
                 sound::play_sound(
                     &resources.unmute_sound,
@@ -222,4 +241,31 @@ pub fn apply_mute_ui(
         MonitorAction::NoChange => {}
     }
     focusmute_lib::hooks::run_action_hook(action, &state.config);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mute_tooltip;
+
+    #[test]
+    fn tooltip_names_state_microphone_and_missing_scarlett() {
+        assert_eq!(mute_tooltip(true, None, true), "FocusMute — Muted");
+        assert_eq!(
+            mute_tooltip(false, Some("Focusrite USB Audio"), true),
+            "FocusMute — Live · Focusrite USB Audio"
+        );
+        assert_eq!(
+            mute_tooltip(true, Some("Webcam"), false),
+            "FocusMute — Muted · Webcam · Scarlett disconnected"
+        );
+    }
+
+    /// Windows cuts tooltips at 127 characters; the state must survive.
+    #[test]
+    fn tooltip_stays_within_the_windows_limit() {
+        let long = "x".repeat(300);
+        let text = mute_tooltip(true, Some(&long), false);
+        assert!(text.chars().count() < 128, "{}", text.chars().count());
+        assert!(text.starts_with("FocusMute — Muted"));
+    }
 }

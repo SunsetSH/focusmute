@@ -34,7 +34,17 @@ pub trait MuteMonitor {
     /// Housekeeping on the thread that created the monitor, called on every
     /// event-loop pass. Must be cheap when there is nothing to do. WASAPI
     /// uses it to follow a change of the default microphone.
-    fn maintain(&self) {}
+    ///
+    /// Returns `true` when the monitor now watches a different microphone,
+    /// whose mute state the caller should adopt without treating it as a
+    /// mute or unmute.
+    fn maintain(&self) -> bool {
+        false
+    }
+    /// Friendly name of the microphone being watched, if known.
+    fn device_name(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Wait on a `(Mutex<bool>, Condvar)` signal pair with a timeout.
@@ -245,6 +255,10 @@ mod wasapi {
         /// Set by [`DefaultDeviceClient`] when Windows picks another microphone.
         default_changed: Arc<AtomicBool>,
         device_client: IMMNotificationClient,
+        /// When a failed switch to the new default microphone is retried.
+        /// Windows announces the change before every endpoint is ready, so
+        /// one failure must not leave the monitor on the old microphone.
+        retry_at: Mutex<Option<std::time::Instant>>,
     }
 
     // COM pointers are Send-safe with proper initialization per thread.
@@ -290,6 +304,7 @@ mod wasapi {
                     signal,
                     default_changed,
                     device_client,
+                    retry_at: Mutex::new(None),
                 })
             }
         }
@@ -321,15 +336,27 @@ mod wasapi {
             super::wait_on_signal(&self.signal, timeout)
         }
 
-        fn maintain(&self) {
-            if !self.default_changed.swap(false, Ordering::SeqCst) {
-                return;
+        fn device_name(&self) -> Option<String> {
+            WasapiMonitor::device_name(self)
+        }
+
+        fn maintain(&self) -> bool {
+            /// Gap between attempts to open a default microphone that failed.
+            const RETRY: Duration = Duration::from_secs(2);
+
+            let Ok(mut retry_at) = self.retry_at.lock() else {
+                return false;
+            };
+            let retry_due = retry_at.is_some_and(|at| std::time::Instant::now() >= at);
+            if !self.default_changed.swap(false, Ordering::SeqCst) && !retry_due {
+                return false;
             }
             let Ok(mut endpoint) = self.endpoint.lock() else {
-                return;
+                return false;
             };
             match unsafe { Endpoint::open_default(&self.enumerator, &self.muted, &self.signal) } {
                 Ok(new_endpoint) => {
+                    *retry_at = None;
                     log::info!(
                         "[audio] default microphone changed: {}",
                         new_endpoint.device_name.as_deref().unwrap_or("(unknown)")
@@ -341,8 +368,17 @@ mod wasapi {
                         *changed = true;
                         self.signal.1.notify_all();
                     }
+                    true
                 }
-                Err(e) => log::warn!("[audio] could not follow the new default microphone: {e}"),
+                Err(e) => {
+                    if retry_at.is_none() {
+                        log::warn!("[audio] could not follow the new default microphone: {e}");
+                    } else {
+                        log::debug!("[audio] default microphone still unavailable: {e}");
+                    }
+                    *retry_at = Some(std::time::Instant::now() + RETRY);
+                    false
+                }
             }
         }
     }
@@ -522,6 +558,10 @@ mod pulse {
     impl MuteMonitor for PulseAudioMonitor {
         fn is_muted(&self) -> bool {
             self.muted.load(Ordering::SeqCst)
+        }
+
+        fn device_name(&self) -> Option<String> {
+            PulseAudioMonitor::device_name(self)
         }
 
         fn set_muted(&self, muted: bool) -> Result<()> {

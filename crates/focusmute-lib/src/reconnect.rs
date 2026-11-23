@@ -63,6 +63,15 @@ impl ReconnectState {
         }
     }
 
+    /// Time left until [`should_attempt`](Self::should_attempt) turns true;
+    /// zero when an attempt is due now. Lets an idle loop sleep until then.
+    pub fn time_until_next_attempt(&self) -> Duration {
+        match self.last_attempt {
+            None => Duration::ZERO,
+            Some(last) => self.current_delay.saturating_sub(last.elapsed()),
+        }
+    }
+
     /// Record a failed reconnection attempt and advance the backoff.
     pub fn record_failure(&mut self) {
         self.consecutive_failures += 1;
@@ -182,6 +191,17 @@ pub fn try_reconnect_and_refresh(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn time_until_next_attempt_counts_down_the_backoff() {
+        let mut state = ReconnectState::with_defaults();
+        assert_eq!(state.time_until_next_attempt(), Duration::ZERO);
+        state.record_failure();
+        let left = state.time_until_next_attempt();
+        assert!(left > Duration::from_millis(1500) && left <= Duration::from_secs(2));
+        state.record_success();
+        assert_eq!(state.time_until_next_attempt(), Duration::ZERO);
+    }
 
     #[test]
     fn default_config_values() {
