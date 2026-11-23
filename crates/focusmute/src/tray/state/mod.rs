@@ -14,7 +14,9 @@ mod menu;
 
 pub use hotkey::{HotkeyState, register_hotkeys, reregister_ptt, reregister_toggle};
 pub(crate) use menu::show_startup_warnings;
-pub use menu::{TrayMenu, apply_mute_ui, build_tray_icon, build_tray_menu, set_tray_mute_state};
+pub use menu::{
+    TrayMenu, apply_mute_ui, build_tray_icon, build_tray_menu, set_tray_mute_state, show_mute_state,
+};
 
 use focusmute_lib::config::Config;
 use focusmute_lib::context::DeviceContext;
@@ -115,13 +117,54 @@ pub fn set_autostart(enabled: bool) {
     }
 }
 
-/// Point an enabled autostart entry at this executable. A portable EXE that
-/// was moved would otherwise leave the login entry on the old path.
+/// Point an existing per-user autostart entry at this executable, so a
+/// portable EXE that was moved does not leave login starting the old path.
+///
+/// Only the `Run` value's path is rewritten, and only when it differs.
+/// `AutoLaunch::enable` would also reset the Task Manager "Startup apps"
+/// switch and try HKLM first, re-enabling a startup the user turned off.
+#[cfg(windows)]
 pub fn refresh_autostart() {
-    if let Some(al) = get_auto_launch()
-        && let Err(e) = al.enable()
-    {
-        log::warn!("[autostart] could not refresh the login entry: {e}");
+    use winreg::RegKey;
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE};
+
+    const RUN: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
+    let Some(exe) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(str::to_owned))
+    else {
+        return;
+    };
+    let Ok(run) =
+        RegKey::predef(HKEY_CURRENT_USER).open_subkey_with_flags(RUN, KEY_READ | KEY_SET_VALUE)
+    else {
+        return;
+    };
+    // No entry: the user (or Task Manager) removed it; do not recreate it.
+    let Ok(current) = run.get_value::<String, _>("FocusMute") else {
+        return;
+    };
+    if autostart_path(&current).eq_ignore_ascii_case(&exe) {
+        return;
+    }
+    // The same format auto-launch writes: the path, then the (empty) args.
+    match run.set_value("FocusMute", &format!("{exe} ")) {
+        Ok(()) => log::info!("[autostart] login entry moved to {exe}"),
+        Err(e) => log::warn!("[autostart] could not update the login entry: {e}"),
+    }
+}
+
+#[cfg(not(windows))]
+pub fn refresh_autostart() {}
+
+/// The executable path of a `Run` value: auto-launch writes it unquoted with
+/// a trailing space, other tools quote it.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn autostart_path(value: &str) -> &str {
+    let value = value.trim();
+    match value.strip_prefix('"') {
+        Some(rest) => rest.split('"').next().unwrap_or(rest),
+        None => value,
     }
 }
 
@@ -579,6 +622,20 @@ pub fn handle_menu_event(
 
 #[cfg(test)]
 mod tests {
+    use super::autostart_path;
+
+    #[test]
+    fn autostart_path_reads_quoted_and_bare_values() {
+        assert_eq!(
+            autostart_path(r"C:\Apps\FocusMute\focusmute.exe "),
+            r"C:\Apps\FocusMute\focusmute.exe"
+        );
+        assert_eq!(
+            autostart_path(r#""C:\Program Files\FocusMute\focusmute.exe" --tray"#),
+            r"C:\Program Files\FocusMute\focusmute.exe"
+        );
+    }
+
     use super::*;
     use focusmute_lib::device::mock::MockDevice;
     use focusmute_lib::protocol::*;

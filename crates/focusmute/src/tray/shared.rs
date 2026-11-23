@@ -273,12 +273,17 @@ impl MuteIntent {
         }
     }
 
-    /// The state to toggle from: the pending request while it is fresh,
-    /// otherwise what the monitor reports.
+    /// The state to toggle from: the pending request while it is fresh and
+    /// unconfirmed, otherwise what the monitor reports. A confirmed request is
+    /// forgotten, so a change made elsewhere right after it (browser sync, the
+    /// Windows mixer) is not overridden for the rest of [`Self::HOLD`].
     fn current(&self, reported: bool) -> bool {
         match self.target.get() {
-            Some((target, at)) if at.elapsed() < Self::HOLD => target,
-            _ => reported,
+            Some((target, at)) if target != reported && at.elapsed() < Self::HOLD => target,
+            _ => {
+                self.target.set(None);
+                reported
+            }
         }
     }
 
@@ -291,6 +296,40 @@ impl MuteIntent {
         monitor.set_muted(muted)?;
         self.target.set(Some((muted, Instant::now())));
         Ok(())
+    }
+}
+
+/// Polls of the previous microphone that may still be queued after a switch.
+///
+/// The poll thread samples every 250 ms while the idle loop drains every
+/// 500 ms, so two old samples can wait in the channel. After the switch was
+/// adopted silently they would pass the debouncer as a fake transition (a
+/// beep), and the next new sample as a second one. Until a sample reports the
+/// adopted state, or a second passes, a disagreeing sample is discarded.
+struct StalePolls {
+    adopted: Option<(bool, Instant)>,
+}
+
+impl StalePolls {
+    const WINDOW: Duration = Duration::from_secs(1);
+
+    fn new() -> Self {
+        Self { adopted: None }
+    }
+
+    fn adopted(&mut self, muted: bool) {
+        self.adopted = Some((muted, Instant::now()));
+    }
+
+    /// Whether `polled` belongs to the microphone watched before the switch.
+    fn is_stale(&mut self, polled: bool) -> bool {
+        match self.adopted {
+            Some((adopted, at)) if at.elapsed() < Self::WINDOW && polled != adopted => true,
+            _ => {
+                self.adopted = None;
+                false
+            }
+        }
     }
 }
 
@@ -318,12 +357,8 @@ fn adopt_mute_state(
         if let Err(e) = result {
             log::warn!("[mute] could not update LEDs for the new microphone: {e}");
         }
-        state::set_tray_mute_state(tray, muted, state.mic_name.as_deref());
-        tray_menu.status_item.set_text(crate::i18n::tr(
-            &state.config.system.language,
-            if muted { "muted" } else { "live" },
-        ));
     }
+    state::show_mute_state(tray, tray_menu, state, muted, device.is_some());
 }
 
 /// Classify one device notification from the Direct listener.
@@ -616,6 +651,7 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
     let mut osd = crate::osd::Osd::new();
     let intent = MuteIntent::new();
     let mut no_mic_notified = false;
+    let mut stale_polls = StalePolls::new();
 
     loop {
         if !RUNNING.load(Ordering::SeqCst) {
@@ -652,6 +688,7 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
             state.mic_name = m.device_name();
             preexisting_mute = muted;
             adopt_mute_state(&mut state, device.as_ref(), &tray, &tray_menu, muted);
+            stale_polls.adopted(muted);
         }
 
         // 1b. Device removal detection (event-driven via RegisterDeviceNotification).
@@ -722,7 +759,9 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
                     dev,
                     panel,
                     main_monitor.as_deref(),
-                    intent.current(state.indicator.is_muted()),
+                    main_monitor
+                        .as_deref()
+                        .map_or(state.indicator.is_muted(), |m| intent.current(m.is_muted())),
                     &mut direct_gesture,
                     action,
                     now,
@@ -738,6 +777,10 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
         loop {
             match rx.try_recv() {
                 Ok(Msg::MutePoll(muted)) => {
+                    if stale_polls.is_stale(muted) {
+                        log::debug!("[mute] dropped a poll of the previous microphone");
+                        continue;
+                    }
                     let (action, device_lost) = state.process_mute_poll(muted, device.as_ref());
                     if device_lost {
                         log::warn!("[device] disconnected (communication error)");
@@ -808,7 +851,11 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
                             dev,
                             panel,
                             main_monitor.as_deref(),
-                            intent.current(state.indicator.is_muted()),
+                            main_monitor
+                                .as_deref()
+                                .map_or(state.indicator.is_muted(), |m| {
+                                    intent.current(m.is_muted())
+                                }),
                             state.config.hardware_button.direct_double_click_ms,
                             &mut direct_gesture,
                             &packet,
@@ -1239,6 +1286,34 @@ mod tests {
             intent.request(&monitor, target).unwrap();
         }
         assert_eq!(monitor.calls(), vec![true, false]);
+    }
+
+    /// Once the monitor reports the requested state the request is done; a
+    /// later outside change is then taken as reported.
+    #[test]
+    fn a_confirmed_request_is_forgotten() {
+        let intent = MuteIntent::new();
+        intent.request(&LaggyMonitor::new(false), true).unwrap();
+        assert!(intent.current(true), "confirmed");
+        assert!(!intent.current(false), "changed elsewhere afterwards");
+    }
+
+    #[test]
+    fn stale_polls_are_dropped_until_the_new_state_is_seen() {
+        let mut stale = StalePolls::new();
+        assert!(!stale.is_stale(true), "nothing adopted yet");
+        stale.adopted(false);
+        assert!(stale.is_stale(true), "queued sample of the old microphone");
+        assert!(stale.is_stale(true));
+        assert!(!stale.is_stale(false), "first sample of the new one");
+        assert!(!stale.is_stale(true), "a real change after that counts");
+    }
+
+    #[test]
+    fn stale_poll_filter_expires() {
+        let mut stale = StalePolls::new();
+        stale.adopted = Some((false, Instant::now() - StalePolls::WINDOW));
+        assert!(!stale.is_stale(true));
     }
 
     /// A failed command is not remembered: the next toggle starts again

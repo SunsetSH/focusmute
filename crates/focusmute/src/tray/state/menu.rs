@@ -186,6 +186,28 @@ pub(crate) fn show_startup_warnings(warnings: &[String]) {
     crate::notification::Notifier::show_oneshot(&format!("Config warnings:\n{body}"));
 }
 
+/// Show a mute state in the tray. With the Scarlett connected the icon and
+/// the status item follow it; without, they keep showing the disconnected
+/// device and only the tooltip names the state.
+pub fn show_mute_state(
+    tray: &tray_icon::TrayIcon,
+    menu: &TrayMenu,
+    state: &TrayState,
+    muted: bool,
+    device_connected: bool,
+) {
+    if device_connected {
+        set_tray_mute_state(tray, muted, state.mic_name.as_deref());
+        menu.status_item.set_text(crate::i18n::tr(
+            &state.config.system.language,
+            if muted { "muted" } else { "live" },
+        ));
+    } else {
+        tray.set_tooltip(Some(mute_tooltip(muted, state.mic_name.as_deref(), false)))
+            .ok();
+    }
+}
+
 /// Apply mute-state UI updates to the tray icon and status item.
 ///
 /// The mute belongs to the Windows microphone, so sound, notification and
@@ -202,18 +224,7 @@ pub fn apply_mute_ui(
     suppress_sound: bool,
 ) {
     let play_sound = state.config.sound.sound_enabled && !suppress_sound;
-    let show = |muted: bool| {
-        if device_connected {
-            set_tray_mute_state(tray, muted, state.mic_name.as_deref());
-            menu.status_item.set_text(crate::i18n::tr(
-                &state.config.system.language,
-                if muted { "muted" } else { "live" },
-            ));
-        } else {
-            tray.set_tooltip(Some(mute_tooltip(muted, state.mic_name.as_deref(), false)))
-                .ok();
-        }
-    };
+    let show = |muted: bool| show_mute_state(tray, menu, state, muted, device_connected);
     match action {
         MonitorAction::ApplyMute => {
             log::info!("[mute] muted");
