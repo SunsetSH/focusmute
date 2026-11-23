@@ -1403,6 +1403,17 @@ pub mod mock {
     use std::cell::{Cell, RefCell};
     use std::collections::HashMap;
 
+    /// One device operation, in the order it was issued.
+    ///
+    /// Tests compare whole sequences: the single-LED path depends on colour
+    /// being written before index, and a final-state map cannot show that.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum MockOp {
+        Get(u32, u32),
+        Set(u32, Vec<u8>),
+        Notify(u32),
+    }
+
     /// In-memory device for unit tests. Stores descriptor data in a HashMap
     /// keyed by offset; `set_descriptor` writes, `get_descriptor` reads.
     /// `transact_handlers` allows tests to inject mock responses for raw transact calls.
@@ -1412,6 +1423,8 @@ pub mod mock {
         pub descriptors: RefCell<HashMap<u32, Vec<u8>>>,
         /// Recorded notify events (event_id).
         pub notifies: RefCell<Vec<u32>>,
+        /// Every descriptor read, write and notify, in issue order.
+        pub ops: RefCell<Vec<MockOp>>,
         /// Mock transact responses: cmd → response bytes.
         pub transact_handlers: RefCell<HashMap<u32, Vec<Vec<u8>>>>,
         /// Recorded transact calls: (cmd, payload).
@@ -1448,6 +1461,7 @@ pub mod mock {
                 },
                 descriptors: RefCell::new(HashMap::new()),
                 notifies: RefCell::new(Vec::new()),
+                ops: RefCell::new(Vec::new()),
                 transact_handlers: RefCell::new(HashMap::new()),
                 transact_payloads: RefCell::new(Vec::new()),
                 get_descriptor_max_len: Cell::new(None),
@@ -1459,6 +1473,34 @@ pub mod mock {
         /// Mutable access to device info (for tests that need a different model name).
         pub fn info_mut(&mut self) -> &mut DeviceInfo {
             &mut self.info
+        }
+
+        /// Serve `json` as this device's firmware schema over INFO_DEVMAP /
+        /// GET_DEVMAP, encoded the way the firmware stores it (zlib, base64).
+        pub fn serve_schema(&self, json: &str) {
+            use crate::protocol::{
+                CMD_GET_DEVMAP, CMD_INFO_DEVMAP, DEVMAP_PAGE_SIZE, DEVMAP_RESPONSE_SIZE,
+            };
+            use base64::Engine;
+            use std::io::Write;
+
+            let mut encoder =
+                flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+            encoder.write_all(json.as_bytes()).unwrap();
+            let raw = base64::engine::general_purpose::STANDARD
+                .encode(encoder.finish().unwrap())
+                .into_bytes();
+
+            let mut info = vec![0u8; 8];
+            info.extend_from_slice(&0u16.to_le_bytes());
+            info.extend_from_slice(&(raw.len() as u16).to_le_bytes());
+            self.add_transact_response(CMD_INFO_DEVMAP, info);
+            for page in raw.chunks(DEVMAP_PAGE_SIZE) {
+                let mut resp = vec![0u8; 8];
+                resp.extend_from_slice(page);
+                resp.resize(DEVMAP_RESPONSE_SIZE, 0);
+                self.add_transact_response(CMD_GET_DEVMAP, resp);
+            }
         }
 
         /// Register a sequence of responses for a given command code.
@@ -1482,6 +1524,7 @@ pub mod mock {
         }
 
         fn get_descriptor(&self, offset: u32, size: u32) -> Result<Vec<u8>> {
+            self.ops.borrow_mut().push(MockOp::Get(offset, size));
             let descs = self.descriptors.borrow();
             let mut result = vec![0u8; size as usize];
             // Overlay all stored regions that intersect [offset..offset+size)
@@ -1510,6 +1553,9 @@ pub mod mock {
                     "mock: set_descriptor failure injected".into(),
                 ));
             }
+            self.ops
+                .borrow_mut()
+                .push(MockOp::Set(offset, data.to_vec()));
             self.descriptors.borrow_mut().insert(offset, data.to_vec());
             Ok(())
         }
@@ -1520,6 +1566,7 @@ pub mod mock {
                     "mock: data_notify failure injected".into(),
                 ));
             }
+            self.ops.borrow_mut().push(MockOp::Notify(event_id));
             self.notifies.borrow_mut().push(event_id);
             Ok(())
         }

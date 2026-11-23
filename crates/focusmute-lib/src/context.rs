@@ -28,12 +28,26 @@ impl DeviceContext {
     /// Returns `Err(UnsupportedDevice)` if no profile exists and schema
     /// extraction also failed — the device cannot be operated safely.
     pub fn resolve(device: &impl ScarlettDevice, force_schema: bool) -> crate::error::Result<Self> {
+        Self::resolve_at(device, force_schema, None)
+    }
+
+    /// Testable variant of [`resolve`](Self::resolve) with an explicit schema
+    /// cache path, mirroring [`schema::extract_or_cached_at`]. `None` uses the
+    /// real per-user cache.
+    pub fn resolve_at(
+        device: &impl ScarlettDevice,
+        force_schema: bool,
+        cache_path: Option<&std::path::Path>,
+    ) -> crate::error::Result<Self> {
         let profile = models::detect_model(device.info().model());
 
         let schema = if force_schema || profile.is_none() {
-            schema::extract_or_cached(device)
-                .inspect_err(|e| log::warn!("[context] schema extraction failed: {e}"))
-                .ok()
+            match cache_path {
+                Some(path) => schema::extract_or_cached_at(device, path),
+                None => schema::extract_or_cached(device),
+            }
+            .inspect_err(|e| log::warn!("[context] schema extraction failed: {e}"))
+            .ok()
         } else {
             log::debug!("[context] skipping schema extraction (hardcoded profile exists)");
             None

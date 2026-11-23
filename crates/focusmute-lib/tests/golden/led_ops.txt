@@ -1,0 +1,2560 @@
+== solo numbers inputs=all apply
+  set 80 00 00 00 FF
+  set 84 04
+  notify 8
+  set 80 00 00 00 FF
+  set 84 0C
+  notify 8
+== solo numbers inputs=all blank
+  set 80 00 00 00 00
+  set 84 04
+  notify 8
+  set 80 00 00 00 00
+  set 84 0C
+  notify 8
+== solo numbers inputs=all clear
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo numbers inputs=all restore
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo numbers inputs=all restore_on_exit
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo numbers inputs=all refresh_after_reconnect
+  set 80 00 00 00 FF
+  set 84 04
+  notify 8
+  set 80 00 00 00 FF
+  set 84 0C
+  notify 8
+== solo numbers inputs=all colours apply
+  set 80 00 00 FF 00
+  set 84 04
+  notify 8
+  set 80 00 FF 00 00
+  set 84 0C
+  notify 8
+== solo numbers inputs=all colours blank
+  set 80 00 00 00 00
+  set 84 04
+  notify 8
+  set 80 00 00 00 00
+  set 84 0C
+  notify 8
+== solo numbers inputs=all colours clear
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo numbers inputs=all colours restore
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo numbers inputs=all colours restore_on_exit
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo numbers inputs=all colours refresh_after_reconnect
+  set 80 00 00 FF 00
+  set 84 04
+  notify 8
+  set 80 00 FF 00 00
+  set 84 0C
+  notify 8
+== solo numbers inputs=1 apply
+  set 80 00 00 00 FF
+  set 84 04
+  notify 8
+== solo numbers inputs=1 blank
+  set 80 00 00 00 00
+  set 84 04
+  notify 8
+== solo numbers inputs=1 clear
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+== solo numbers inputs=1 restore
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+== solo numbers inputs=1 restore_on_exit
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+== solo numbers inputs=1 refresh_after_reconnect
+  set 80 00 00 00 FF
+  set 84 04
+  notify 8
+== solo numbers inputs=2 apply
+  set 80 00 00 00 FF
+  set 84 0C
+  notify 8
+== solo numbers inputs=2 blank
+  set 80 00 00 00 00
+  set 84 0C
+  notify 8
+== solo numbers inputs=2 clear
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo numbers inputs=2 restore
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo numbers inputs=2 restore_on_exit
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo numbers inputs=2 refresh_after_reconnect
+  set 80 00 00 00 FF
+  set 84 0C
+  notify 8
+== solo numbers inputs=1,2 apply
+  set 80 00 00 00 FF
+  set 84 04
+  notify 8
+  set 80 00 00 00 FF
+  set 84 0C
+  notify 8
+== solo numbers inputs=1,2 blank
+  set 80 00 00 00 00
+  set 84 04
+  notify 8
+  set 80 00 00 00 00
+  set 84 0C
+  notify 8
+== solo numbers inputs=1,2 clear
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo numbers inputs=1,2 restore
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo numbers inputs=1,2 restore_on_exit
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo numbers inputs=1,2 refresh_after_reconnect
+  set 80 00 00 00 FF
+  set 84 04
+  notify 8
+  set 80 00 00 00 FF
+  set 84 0C
+  notify 8
+== solo numbers_blink inputs=all apply
+  set 80 00 00 00 FF
+  set 84 04
+  notify 8
+  set 80 00 00 00 FF
+  set 84 0C
+  notify 8
+== solo numbers_blink inputs=all blank
+  set 80 00 00 00 00
+  set 84 04
+  notify 8
+  set 80 00 00 00 00
+  set 84 0C
+  notify 8
+== solo numbers_blink inputs=all clear
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo numbers_blink inputs=all restore
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo numbers_blink inputs=all restore_on_exit
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo numbers_blink inputs=all refresh_after_reconnect
+  set 80 00 00 00 FF
+  set 84 04
+  notify 8
+  set 80 00 00 00 FF
+  set 84 0C
+  notify 8
+== solo numbers_blink inputs=all colours apply
+  set 80 00 00 FF 00
+  set 84 04
+  notify 8
+  set 80 00 FF 00 00
+  set 84 0C
+  notify 8
+== solo numbers_blink inputs=all colours blank
+  set 80 00 00 00 00
+  set 84 04
+  notify 8
+  set 80 00 00 00 00
+  set 84 0C
+  notify 8
+== solo numbers_blink inputs=all colours clear
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo numbers_blink inputs=all colours restore
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo numbers_blink inputs=all colours restore_on_exit
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo numbers_blink inputs=all colours refresh_after_reconnect
+  set 80 00 00 FF 00
+  set 84 04
+  notify 8
+  set 80 00 FF 00 00
+  set 84 0C
+  notify 8
+== solo numbers_blink inputs=1 apply
+  set 80 00 00 00 FF
+  set 84 04
+  notify 8
+== solo numbers_blink inputs=1 blank
+  set 80 00 00 00 00
+  set 84 04
+  notify 8
+== solo numbers_blink inputs=1 clear
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+== solo numbers_blink inputs=1 restore
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+== solo numbers_blink inputs=1 restore_on_exit
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+== solo numbers_blink inputs=1 refresh_after_reconnect
+  set 80 00 00 00 FF
+  set 84 04
+  notify 8
+== solo numbers_blink inputs=2 apply
+  set 80 00 00 00 FF
+  set 84 0C
+  notify 8
+== solo numbers_blink inputs=2 blank
+  set 80 00 00 00 00
+  set 84 0C
+  notify 8
+== solo numbers_blink inputs=2 clear
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo numbers_blink inputs=2 restore
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo numbers_blink inputs=2 restore_on_exit
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo numbers_blink inputs=2 refresh_after_reconnect
+  set 80 00 00 00 FF
+  set 84 0C
+  notify 8
+== solo numbers_blink inputs=1,2 apply
+  set 80 00 00 00 FF
+  set 84 04
+  notify 8
+  set 80 00 00 00 FF
+  set 84 0C
+  notify 8
+== solo numbers_blink inputs=1,2 blank
+  set 80 00 00 00 00
+  set 84 04
+  notify 8
+  set 80 00 00 00 00
+  set 84 0C
+  notify 8
+== solo numbers_blink inputs=1,2 clear
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo numbers_blink inputs=1,2 restore
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo numbers_blink inputs=1,2 restore_on_exit
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo numbers_blink inputs=1,2 refresh_after_reconnect
+  set 80 00 00 00 FF
+  set 84 04
+  notify 8
+  set 80 00 00 00 FF
+  set 84 0C
+  notify 8
+== solo extended inputs=all apply
+  set 80 00 00 00 FF
+  set 84 04
+  notify 8
+  set 80 00 00 00 FF
+  set 84 0C
+  notify 8
+  set 80 00 00 00 FF
+  set 84 18
+  notify 8
+  set 80 00 00 00 FF
+  set 84 19
+  notify 8
+== solo extended inputs=all blank
+  set 80 00 00 00 00
+  set 84 04
+  notify 8
+  set 80 00 00 00 00
+  set 84 0C
+  notify 8
+== solo extended inputs=all clear
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+  set 80 00 DD FF AA
+  set 84 18
+  notify 8
+  set 80 00 DD FF AA
+  set 84 19
+  notify 8
+== solo extended inputs=all restore
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+  set 80 00 DD FF AA
+  set 84 18
+  notify 8
+  set 80 00 DD FF AA
+  set 84 19
+  notify 8
+== solo extended inputs=all restore_on_exit
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo extended inputs=all refresh_after_reconnect
+  set 80 00 00 00 FF
+  set 84 04
+  notify 8
+  set 80 00 00 00 FF
+  set 84 0C
+  notify 8
+== solo extended inputs=all colours apply
+  set 80 00 00 00 FF
+  set 84 04
+  notify 8
+  set 80 00 00 00 FF
+  set 84 0C
+  notify 8
+  set 80 00 00 00 FF
+  set 84 18
+  notify 8
+  set 80 00 00 00 FF
+  set 84 19
+  notify 8
+== solo extended inputs=all colours blank
+  set 80 00 00 00 00
+  set 84 04
+  notify 8
+  set 80 00 00 00 00
+  set 84 0C
+  notify 8
+== solo extended inputs=all colours clear
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+  set 80 00 DD FF AA
+  set 84 18
+  notify 8
+  set 80 00 DD FF AA
+  set 84 19
+  notify 8
+== solo extended inputs=all colours restore
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+  set 80 00 DD FF AA
+  set 84 18
+  notify 8
+  set 80 00 DD FF AA
+  set 84 19
+  notify 8
+== solo extended inputs=all colours restore_on_exit
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo extended inputs=all colours refresh_after_reconnect
+  set 80 00 00 FF 00
+  set 84 04
+  notify 8
+  set 80 00 FF 00 00
+  set 84 0C
+  notify 8
+== solo extended inputs=1 apply
+  set 80 00 00 00 FF
+  set 84 04
+  notify 8
+  set 80 00 00 00 FF
+  set 84 0C
+  notify 8
+  set 80 00 00 00 FF
+  set 84 18
+  notify 8
+  set 80 00 00 00 FF
+  set 84 19
+  notify 8
+== solo extended inputs=1 blank
+  set 80 00 00 00 00
+  set 84 04
+  notify 8
+== solo extended inputs=1 clear
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+  set 80 00 DD FF AA
+  set 84 18
+  notify 8
+  set 80 00 DD FF AA
+  set 84 19
+  notify 8
+== solo extended inputs=1 restore
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+  set 80 00 DD FF AA
+  set 84 18
+  notify 8
+  set 80 00 DD FF AA
+  set 84 19
+  notify 8
+== solo extended inputs=1 restore_on_exit
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+== solo extended inputs=1 refresh_after_reconnect
+  set 80 00 00 00 FF
+  set 84 04
+  notify 8
+== solo extended inputs=2 apply
+  set 80 00 00 00 FF
+  set 84 04
+  notify 8
+  set 80 00 00 00 FF
+  set 84 0C
+  notify 8
+  set 80 00 00 00 FF
+  set 84 18
+  notify 8
+  set 80 00 00 00 FF
+  set 84 19
+  notify 8
+== solo extended inputs=2 blank
+  set 80 00 00 00 00
+  set 84 0C
+  notify 8
+== solo extended inputs=2 clear
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+  set 80 00 DD FF AA
+  set 84 18
+  notify 8
+  set 80 00 DD FF AA
+  set 84 19
+  notify 8
+== solo extended inputs=2 restore
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+  set 80 00 DD FF AA
+  set 84 18
+  notify 8
+  set 80 00 DD FF AA
+  set 84 19
+  notify 8
+== solo extended inputs=2 restore_on_exit
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo extended inputs=2 refresh_after_reconnect
+  set 80 00 00 00 FF
+  set 84 0C
+  notify 8
+== solo extended inputs=1,2 apply
+  set 80 00 00 00 FF
+  set 84 04
+  notify 8
+  set 80 00 00 00 FF
+  set 84 0C
+  notify 8
+  set 80 00 00 00 FF
+  set 84 18
+  notify 8
+  set 80 00 00 00 FF
+  set 84 19
+  notify 8
+== solo extended inputs=1,2 blank
+  set 80 00 00 00 00
+  set 84 04
+  notify 8
+  set 80 00 00 00 00
+  set 84 0C
+  notify 8
+== solo extended inputs=1,2 clear
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+  set 80 00 DD FF AA
+  set 84 18
+  notify 8
+  set 80 00 DD FF AA
+  set 84 19
+  notify 8
+== solo extended inputs=1,2 restore
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+  set 80 00 DD FF AA
+  set 84 18
+  notify 8
+  set 80 00 DD FF AA
+  set 84 19
+  notify 8
+== solo extended inputs=1,2 restore_on_exit
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo extended inputs=1,2 refresh_after_reconnect
+  set 80 00 00 00 FF
+  set 84 04
+  notify 8
+  set 80 00 00 00 FF
+  set 84 0C
+  notify 8
+== solo halos_solid inputs=all apply
+  set 80 00 00 00 FF
+  set 84 04
+  notify 8
+  set 80 00 00 00 FF
+  set 84 0C
+  notify 8
+== solo halos_solid inputs=all blank
+  set 80 00 00 00 00
+  set 84 04
+  notify 8
+  set 80 00 00 00 00
+  set 84 0C
+  notify 8
+== solo halos_solid inputs=all clear
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo halos_solid inputs=all restore
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo halos_solid inputs=all restore_on_exit
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo halos_solid inputs=all refresh_after_reconnect
+  set 80 00 00 00 FF
+  set 84 04
+  notify 8
+  set 80 00 00 00 FF
+  set 84 0C
+  notify 8
+== solo halos_solid inputs=all colours apply
+  set 80 00 00 FF 00
+  set 84 04
+  notify 8
+  set 80 00 FF 00 00
+  set 84 0C
+  notify 8
+== solo halos_solid inputs=all colours blank
+  set 80 00 00 00 00
+  set 84 04
+  notify 8
+  set 80 00 00 00 00
+  set 84 0C
+  notify 8
+== solo halos_solid inputs=all colours clear
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo halos_solid inputs=all colours restore
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo halos_solid inputs=all colours restore_on_exit
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo halos_solid inputs=all colours refresh_after_reconnect
+  set 80 00 00 FF 00
+  set 84 04
+  notify 8
+  set 80 00 FF 00 00
+  set 84 0C
+  notify 8
+== solo halos_solid inputs=1 apply
+  set 80 00 00 00 FF
+  set 84 04
+  notify 8
+== solo halos_solid inputs=1 blank
+  set 80 00 00 00 00
+  set 84 04
+  notify 8
+== solo halos_solid inputs=1 clear
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+== solo halos_solid inputs=1 restore
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+== solo halos_solid inputs=1 restore_on_exit
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+== solo halos_solid inputs=1 refresh_after_reconnect
+  set 80 00 00 00 FF
+  set 84 04
+  notify 8
+== solo halos_solid inputs=2 apply
+  set 80 00 00 00 FF
+  set 84 0C
+  notify 8
+== solo halos_solid inputs=2 blank
+  set 80 00 00 00 00
+  set 84 0C
+  notify 8
+== solo halos_solid inputs=2 clear
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo halos_solid inputs=2 restore
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo halos_solid inputs=2 restore_on_exit
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo halos_solid inputs=2 refresh_after_reconnect
+  set 80 00 00 00 FF
+  set 84 0C
+  notify 8
+== solo halos_solid inputs=1,2 apply
+  set 80 00 00 00 FF
+  set 84 04
+  notify 8
+  set 80 00 00 00 FF
+  set 84 0C
+  notify 8
+== solo halos_solid inputs=1,2 blank
+  set 80 00 00 00 00
+  set 84 04
+  notify 8
+  set 80 00 00 00 00
+  set 84 0C
+  notify 8
+== solo halos_solid inputs=1,2 clear
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo halos_solid inputs=1,2 restore
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo halos_solid inputs=1,2 restore_on_exit
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== solo halos_solid inputs=1,2 refresh_after_reconnect
+  set 80 00 00 00 FF
+  set 84 04
+  notify 8
+  set 80 00 00 00 FF
+  set 84 0C
+  notify 8
+== 2i2 selected=0 numbers inputs=all apply
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers inputs=all blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers inputs=all clear
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers inputs=all restore
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers inputs=all restore_on_exit
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers inputs=all refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers inputs=all colours apply
+  set 84 00 00 FF 00
+  set 88 00
+  notify 8
+  set 84 00 FF 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers inputs=all colours blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers inputs=all colours clear
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers inputs=all colours restore
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers inputs=all colours restore_on_exit
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers inputs=all colours refresh_after_reconnect
+  set 84 00 00 FF 00
+  set 88 00
+  notify 8
+  set 84 00 FF 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers inputs=1 apply
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+== 2i2 selected=0 numbers inputs=1 blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+== 2i2 selected=0 numbers inputs=1 clear
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+== 2i2 selected=0 numbers inputs=1 restore
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+== 2i2 selected=0 numbers inputs=1 restore_on_exit
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+== 2i2 selected=0 numbers inputs=1 refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+== 2i2 selected=0 numbers inputs=2 apply
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers inputs=2 blank
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers inputs=2 clear
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers inputs=2 restore
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers inputs=2 restore_on_exit
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers inputs=2 refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers inputs=1,2 apply
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers inputs=1,2 blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers inputs=1,2 clear
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers inputs=1,2 restore
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers inputs=1,2 restore_on_exit
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers inputs=1,2 refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=all apply
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=all blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=all clear
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=all restore
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=all restore_on_exit
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=all refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=all colours apply
+  set 84 00 00 FF 00
+  set 88 00
+  notify 8
+  set 84 00 FF 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=all colours blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=all colours clear
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=all colours restore
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=all colours restore_on_exit
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=all colours refresh_after_reconnect
+  set 84 00 00 FF 00
+  set 88 00
+  notify 8
+  set 84 00 FF 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=1 apply
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=1 blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=1 clear
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=1 restore
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=1 restore_on_exit
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=1 refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=2 apply
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=2 blank
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=2 clear
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=2 restore
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=2 restore_on_exit
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=2 refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=1,2 apply
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=1,2 blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=1,2 clear
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=1,2 restore
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=1,2 restore_on_exit
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 numbers_blink inputs=1,2 refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=0 extended inputs=all apply
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+  set 84 00 00 00 FF
+  set 88 25
+  notify 8
+  set 84 00 00 00 FF
+  set 88 26
+  notify 8
+== 2i2 selected=0 extended inputs=all blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=0 extended inputs=all clear
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+  set 84 00 88 80 70
+  set 88 25
+  notify 8
+  set 84 00 88 80 70
+  set 88 26
+  notify 8
+== 2i2 selected=0 extended inputs=all restore
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+  set 84 00 88 80 70
+  set 88 25
+  notify 8
+  set 84 00 88 80 70
+  set 88 26
+  notify 8
+== 2i2 selected=0 extended inputs=all restore_on_exit
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 extended inputs=all refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=0 extended inputs=all colours apply
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+  set 84 00 00 00 FF
+  set 88 25
+  notify 8
+  set 84 00 00 00 FF
+  set 88 26
+  notify 8
+== 2i2 selected=0 extended inputs=all colours blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=0 extended inputs=all colours clear
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+  set 84 00 88 80 70
+  set 88 25
+  notify 8
+  set 84 00 88 80 70
+  set 88 26
+  notify 8
+== 2i2 selected=0 extended inputs=all colours restore
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+  set 84 00 88 80 70
+  set 88 25
+  notify 8
+  set 84 00 88 80 70
+  set 88 26
+  notify 8
+== 2i2 selected=0 extended inputs=all colours restore_on_exit
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 extended inputs=all colours refresh_after_reconnect
+  set 84 00 00 FF 00
+  set 88 00
+  notify 8
+  set 84 00 FF 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=0 extended inputs=1 apply
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+  set 84 00 00 00 FF
+  set 88 25
+  notify 8
+  set 84 00 00 00 FF
+  set 88 26
+  notify 8
+== 2i2 selected=0 extended inputs=1 blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+== 2i2 selected=0 extended inputs=1 clear
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+  set 84 00 88 80 70
+  set 88 25
+  notify 8
+  set 84 00 88 80 70
+  set 88 26
+  notify 8
+== 2i2 selected=0 extended inputs=1 restore
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+  set 84 00 88 80 70
+  set 88 25
+  notify 8
+  set 84 00 88 80 70
+  set 88 26
+  notify 8
+== 2i2 selected=0 extended inputs=1 restore_on_exit
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+== 2i2 selected=0 extended inputs=1 refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+== 2i2 selected=0 extended inputs=2 apply
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+  set 84 00 00 00 FF
+  set 88 25
+  notify 8
+  set 84 00 00 00 FF
+  set 88 26
+  notify 8
+== 2i2 selected=0 extended inputs=2 blank
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=0 extended inputs=2 clear
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+  set 84 00 88 80 70
+  set 88 25
+  notify 8
+  set 84 00 88 80 70
+  set 88 26
+  notify 8
+== 2i2 selected=0 extended inputs=2 restore
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+  set 84 00 88 80 70
+  set 88 25
+  notify 8
+  set 84 00 88 80 70
+  set 88 26
+  notify 8
+== 2i2 selected=0 extended inputs=2 restore_on_exit
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 extended inputs=2 refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=0 extended inputs=1,2 apply
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+  set 84 00 00 00 FF
+  set 88 25
+  notify 8
+  set 84 00 00 00 FF
+  set 88 26
+  notify 8
+== 2i2 selected=0 extended inputs=1,2 blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=0 extended inputs=1,2 clear
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+  set 84 00 88 80 70
+  set 88 25
+  notify 8
+  set 84 00 88 80 70
+  set 88 26
+  notify 8
+== 2i2 selected=0 extended inputs=1,2 restore
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+  set 84 00 88 80 70
+  set 88 25
+  notify 8
+  set 84 00 88 80 70
+  set 88 26
+  notify 8
+== 2i2 selected=0 extended inputs=1,2 restore_on_exit
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 extended inputs=1,2 refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=0 halos_solid inputs=all apply
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=0 halos_solid inputs=all blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=0 halos_solid inputs=all clear
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 halos_solid inputs=all restore
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 halos_solid inputs=all restore_on_exit
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 halos_solid inputs=all refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=0 halos_solid inputs=all colours apply
+  set 84 00 00 FF 00
+  set 88 00
+  notify 8
+  set 84 00 FF 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=0 halos_solid inputs=all colours blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=0 halos_solid inputs=all colours clear
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 halos_solid inputs=all colours restore
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 halos_solid inputs=all colours restore_on_exit
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 halos_solid inputs=all colours refresh_after_reconnect
+  set 84 00 00 FF 00
+  set 88 00
+  notify 8
+  set 84 00 FF 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=0 halos_solid inputs=1 apply
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+== 2i2 selected=0 halos_solid inputs=1 blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+== 2i2 selected=0 halos_solid inputs=1 clear
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+== 2i2 selected=0 halos_solid inputs=1 restore
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+== 2i2 selected=0 halos_solid inputs=1 restore_on_exit
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+== 2i2 selected=0 halos_solid inputs=1 refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+== 2i2 selected=0 halos_solid inputs=2 apply
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=0 halos_solid inputs=2 blank
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=0 halos_solid inputs=2 clear
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 halos_solid inputs=2 restore
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 halos_solid inputs=2 restore_on_exit
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 halos_solid inputs=2 refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=0 halos_solid inputs=1,2 apply
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=0 halos_solid inputs=1,2 blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=0 halos_solid inputs=1,2 clear
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 halos_solid inputs=1,2 restore
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 halos_solid inputs=1,2 restore_on_exit
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 00
+  notify 8
+  set 84 00 DD FF AA
+  set 88 08
+  notify 8
+== 2i2 selected=0 halos_solid inputs=1,2 refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers inputs=all apply
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers inputs=all blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers inputs=all clear
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers inputs=all restore
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers inputs=all restore_on_exit
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers inputs=all refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers inputs=all colours apply
+  set 84 00 00 FF 00
+  set 88 00
+  notify 8
+  set 84 00 FF 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers inputs=all colours blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers inputs=all colours clear
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers inputs=all colours restore
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers inputs=all colours restore_on_exit
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers inputs=all colours refresh_after_reconnect
+  set 84 00 00 FF 00
+  set 88 00
+  notify 8
+  set 84 00 FF 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers inputs=1 apply
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+== 2i2 selected=1 numbers inputs=1 blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+== 2i2 selected=1 numbers inputs=1 clear
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+== 2i2 selected=1 numbers inputs=1 restore
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+== 2i2 selected=1 numbers inputs=1 restore_on_exit
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+== 2i2 selected=1 numbers inputs=1 refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+== 2i2 selected=1 numbers inputs=2 apply
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers inputs=2 blank
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers inputs=2 clear
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers inputs=2 restore
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers inputs=2 restore_on_exit
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers inputs=2 refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers inputs=1,2 apply
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers inputs=1,2 blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers inputs=1,2 clear
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers inputs=1,2 restore
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers inputs=1,2 restore_on_exit
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers inputs=1,2 refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=all apply
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=all blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=all clear
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=all restore
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=all restore_on_exit
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=all refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=all colours apply
+  set 84 00 00 FF 00
+  set 88 00
+  notify 8
+  set 84 00 FF 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=all colours blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=all colours clear
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=all colours restore
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=all colours restore_on_exit
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=all colours refresh_after_reconnect
+  set 84 00 00 FF 00
+  set 88 00
+  notify 8
+  set 84 00 FF 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=1 apply
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=1 blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=1 clear
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=1 restore
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=1 restore_on_exit
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=1 refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=2 apply
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=2 blank
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=2 clear
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=2 restore
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=2 restore_on_exit
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=2 refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=1,2 apply
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=1,2 blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=1,2 clear
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=1,2 restore
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=1,2 restore_on_exit
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 numbers_blink inputs=1,2 refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=1 extended inputs=all apply
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+  set 84 00 00 00 FF
+  set 88 25
+  notify 8
+  set 84 00 00 00 FF
+  set 88 26
+  notify 8
+== 2i2 selected=1 extended inputs=all blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=1 extended inputs=all clear
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+  set 84 00 88 80 70
+  set 88 25
+  notify 8
+  set 84 00 88 80 70
+  set 88 26
+  notify 8
+== 2i2 selected=1 extended inputs=all restore
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+  set 84 00 88 80 70
+  set 88 25
+  notify 8
+  set 84 00 88 80 70
+  set 88 26
+  notify 8
+== 2i2 selected=1 extended inputs=all restore_on_exit
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 extended inputs=all refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=1 extended inputs=all colours apply
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+  set 84 00 00 00 FF
+  set 88 25
+  notify 8
+  set 84 00 00 00 FF
+  set 88 26
+  notify 8
+== 2i2 selected=1 extended inputs=all colours blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=1 extended inputs=all colours clear
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+  set 84 00 88 80 70
+  set 88 25
+  notify 8
+  set 84 00 88 80 70
+  set 88 26
+  notify 8
+== 2i2 selected=1 extended inputs=all colours restore
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+  set 84 00 88 80 70
+  set 88 25
+  notify 8
+  set 84 00 88 80 70
+  set 88 26
+  notify 8
+== 2i2 selected=1 extended inputs=all colours restore_on_exit
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 extended inputs=all colours refresh_after_reconnect
+  set 84 00 00 FF 00
+  set 88 00
+  notify 8
+  set 84 00 FF 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=1 extended inputs=1 apply
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+  set 84 00 00 00 FF
+  set 88 25
+  notify 8
+  set 84 00 00 00 FF
+  set 88 26
+  notify 8
+== 2i2 selected=1 extended inputs=1 blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+== 2i2 selected=1 extended inputs=1 clear
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+  set 84 00 88 80 70
+  set 88 25
+  notify 8
+  set 84 00 88 80 70
+  set 88 26
+  notify 8
+== 2i2 selected=1 extended inputs=1 restore
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+  set 84 00 88 80 70
+  set 88 25
+  notify 8
+  set 84 00 88 80 70
+  set 88 26
+  notify 8
+== 2i2 selected=1 extended inputs=1 restore_on_exit
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+== 2i2 selected=1 extended inputs=1 refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+== 2i2 selected=1 extended inputs=2 apply
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+  set 84 00 00 00 FF
+  set 88 25
+  notify 8
+  set 84 00 00 00 FF
+  set 88 26
+  notify 8
+== 2i2 selected=1 extended inputs=2 blank
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=1 extended inputs=2 clear
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+  set 84 00 88 80 70
+  set 88 25
+  notify 8
+  set 84 00 88 80 70
+  set 88 26
+  notify 8
+== 2i2 selected=1 extended inputs=2 restore
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+  set 84 00 88 80 70
+  set 88 25
+  notify 8
+  set 84 00 88 80 70
+  set 88 26
+  notify 8
+== 2i2 selected=1 extended inputs=2 restore_on_exit
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 extended inputs=2 refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=1 extended inputs=1,2 apply
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+  set 84 00 00 00 FF
+  set 88 25
+  notify 8
+  set 84 00 00 00 FF
+  set 88 26
+  notify 8
+== 2i2 selected=1 extended inputs=1,2 blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=1 extended inputs=1,2 clear
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+  set 84 00 88 80 70
+  set 88 25
+  notify 8
+  set 84 00 88 80 70
+  set 88 26
+  notify 8
+== 2i2 selected=1 extended inputs=1,2 restore
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+  set 84 00 88 80 70
+  set 88 25
+  notify 8
+  set 84 00 88 80 70
+  set 88 26
+  notify 8
+== 2i2 selected=1 extended inputs=1,2 restore_on_exit
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 extended inputs=1,2 refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=1 halos_solid inputs=all apply
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=1 halos_solid inputs=all blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=1 halos_solid inputs=all clear
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 halos_solid inputs=all restore
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 halos_solid inputs=all restore_on_exit
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 halos_solid inputs=all refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=1 halos_solid inputs=all colours apply
+  set 84 00 00 FF 00
+  set 88 00
+  notify 8
+  set 84 00 FF 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=1 halos_solid inputs=all colours blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=1 halos_solid inputs=all colours clear
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 halos_solid inputs=all colours restore
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 halos_solid inputs=all colours restore_on_exit
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 halos_solid inputs=all colours refresh_after_reconnect
+  set 84 00 00 FF 00
+  set 88 00
+  notify 8
+  set 84 00 FF 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=1 halos_solid inputs=1 apply
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+== 2i2 selected=1 halos_solid inputs=1 blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+== 2i2 selected=1 halos_solid inputs=1 clear
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+== 2i2 selected=1 halos_solid inputs=1 restore
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+== 2i2 selected=1 halos_solid inputs=1 restore_on_exit
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+== 2i2 selected=1 halos_solid inputs=1 refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+== 2i2 selected=1 halos_solid inputs=2 apply
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=1 halos_solid inputs=2 blank
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=1 halos_solid inputs=2 clear
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 halos_solid inputs=2 restore
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 halos_solid inputs=2 restore_on_exit
+  get 331 1
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 halos_solid inputs=2 refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=1 halos_solid inputs=1,2 apply
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== 2i2 selected=1 halos_solid inputs=1,2 blank
+  set 84 00 00 00 00
+  set 88 00
+  notify 8
+  set 84 00 00 00 00
+  set 88 08
+  notify 8
+== 2i2 selected=1 halos_solid inputs=1,2 clear
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 halos_solid inputs=1,2 restore
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 halos_solid inputs=1,2 restore_on_exit
+  get 331 1
+  set 84 00 DD FF AA
+  set 88 00
+  notify 8
+  set 84 00 00 FF 20
+  set 88 08
+  notify 8
+== 2i2 selected=1 halos_solid inputs=1,2 refresh_after_reconnect
+  set 84 00 00 00 FF
+  set 88 00
+  notify 8
+  set 84 00 00 00 FF
+  set 88 08
+  notify 8
+== solo direct set true
+  set 217 00
+  set 216 01
+  notify 12
+== solo direct set false
+  set 217 00
+  set 216 00
+  notify 12
+== solo direct read -> Some(false)
+  get 264 1
+== solo lab test 4 -> true
+  set 80 00 00 00 FF
+  set 84 04
+  notify 8
+== solo lab test 0 -> false
+== solo lab restore -> true
+  set 80 00 DD FF AA
+  set 84 04
+  notify 8
+  set 80 00 DD FF AA
+  set 84 0C
+  notify 8
+== 2i2 direct set true
+== 2i2 direct set false
+== 2i2 direct read -> None
+== 2i2 lab test 4 -> false
+== 2i2 lab test 0 -> false
+== 2i2 lab restore -> false
