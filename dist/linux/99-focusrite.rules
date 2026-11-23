@@ -1,5 +1,6 @@
-﻿# udev rules for Focusrite USB audio interfaces
-# Grants logged-in desktop users access to Focusrite devices (VID 1235)`n# without making the device world-writable.
+# udev rules for Focusrite USB audio interfaces
+# Grants logged-in desktop users access to Focusrite devices (VID 1235)
+# without making the device world-writable.
 #
 # Install to: /etc/udev/rules.d/99-focusrite.rules
 # Then reload: sudo udevadm control --reload-rules && sudo udevadm trigger

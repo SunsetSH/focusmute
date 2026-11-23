@@ -85,7 +85,9 @@ Focusrite Control 2 is a native desktop application for controlling Focusrite au
 
 ### Phase 4: Firmware Schema & LED API Discovery
 - [09-led-control-api-discovery.md](09-led-control-api-discovery.md) - Complete LED control API extracted from GET_DEVMAP firmware schema
-- [device_firmware_schema.json](device_firmware_schema.json) - Full 24,971-byte firmware API schema (87 fields, 17 enums, 5 structs)
+- [device_firmware_schema.json](device_firmware_schema.json) - Scarlett 2i2 4th Gen, firmware 2.0.2417.0: full 24,971-byte firmware API schema (87 fields, 17 enums, 5 structs)
+- [device_firmware_schema_3.0.2452.0.json](device_firmware_schema_3.0.2452.0.json) - Scarlett 2i2 4th Gen, firmware 3.0.2452.0 (from upstream barnumbirr/focusmute): every APP_SPACE member after `name` moved by 24 bytes
+- [device_firmware_schema_solo_2.0.2417.0.json](device_firmware_schema_solo_2.0.2417.0.json) - Scarlett Solo 4th Gen, firmware 2.0.2417.0, read from this project's device; the source of the Solo profile's offsets
 
 ### Phase 5: USB Access & Driver Communication
 - [10-usb-access-investigation.md](10-usb-access-investigation.md) - How to send commands through the Focusrite driver stack from userspace
