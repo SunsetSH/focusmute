@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-11-23
+
+Ports barnumbirr/focusmute 0.12.0 and 0.12.1 (per-device LED offsets, the
+Solo profile, firmware 3.x headers, dependency updates) and fixes from the
+Windows review in docs/23 and docs/24.
+
+### Added
+
+- Scarlett Solo 4th Gen model profile, verified on this project's device: numbers 4 and 12, Output 24–25, offsets from the Solo's own firmware schema. The Solo no longer reads its schema from the device at startup
+- Firmware 3.x support: the descriptor header is read in one request and recognised in both the 2.x and 3.x layouts. On 3.x the LED offsets come from the device schema; the device is refused rather than written at 2.x offsets if the schema cannot be read. `status`, About and the log show the layout next to the firmware version
+- The tray tooltip names the microphone the mute applies to, and says when the Scarlett is disconnected
+
+### Changed
+
+- LED code knows no model names: offsets, number LEDs, the `extended` Output indicator and the Direct/LED Lab controls all come from the model profile. Every Solo and 2i2 device write is checked byte for byte against a snapshot recorded on 1.1.0
+- On firmware 3.x the Solo's Direct gesture and LED Lab are off until a 3.x schema is verified; mute indication keeps working
+- Sound, OSD, notification and hooks follow the Windows microphone even with the Scarlett unplugged
+- The OSD appears on the monitor of the foreground window, at that monitor's DPI
+- A microphone that was already muted when FocusMute started watching it stays muted on exit
+- tray-icon 0.26, muda 0.21, rodio 0.23, dirs 7. The Windows build no longer links cpal: rodio there only decodes custom WAV files. libxdo is no longer needed on Linux
+
+### Fixed
+
+- `focusmute-cli map` on a Solo wrote the LED mode to the 2i2's offset 77, which on the Solo is `directMonitorAltOffset`; it now uses the schema's 72
+- Without a capture device at startup (autostart before the audio driver) FocusMute stayed without a microphone until restart; the monitor is now retried, and a failed switch to a new default microphone is retried too
+- Two hotkey presses before the first was confirmed sent the same command twice
+- A Focusrite arrival now triggers an immediate reconnect; a stale removal event no longer drops a fresh handle; a context failure after opening keeps the reconnect backoff. Without a device the loop sleeps until the next attempt instead of waking every 50 ms
+- A shortcut that fails to register is not saved, and a failed push-to-talk change keeps the old one
+- With autostart on, the login entry follows a moved portable EXE
+- udev rules file: removed a UTF-8 BOM and a joined comment line
+
 ## [1.1.0] - 2026-11-21
 
 ### Added
