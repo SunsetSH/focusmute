@@ -340,7 +340,14 @@ pub struct Panel {
 /// The Direct button and LED Lab controls this device supports, if any.
 ///
 /// This is the only gate for those features: no caller checks a model name.
+/// The offsets were measured on firmware 2.x. On 3.x every APP_SPACE member
+/// after the name moved by 24 bytes, so the parameter buffer at 216/217 would
+/// be some other field; until a 3.x schema of the model has been checked,
+/// the panel is withheld there rather than guessed.
 pub fn panel(info: &crate::device::DeviceInfo) -> Option<Panel> {
+    if info.header_layout != crate::device::HeaderLayout::V2 {
+        return None;
+    }
     let profile = detect_model(info.model())?;
     Some(Panel {
         offsets: profile.offsets,

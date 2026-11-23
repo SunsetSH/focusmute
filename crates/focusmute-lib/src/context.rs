@@ -3,7 +3,7 @@
 //! Consolidates the repeated resolution pattern used by CLI commands and the
 //! tray app: detect profile → extract schema → compute offsets → predict layout.
 
-use crate::device::{DeviceError, ScarlettDevice};
+use crate::device::{DeviceError, HeaderLayout, ScarlettDevice};
 use crate::layout::{self, PredictedLayout};
 use crate::models::{self, ModelProfile};
 use crate::offsets::DeviceOffsets;
@@ -22,11 +22,12 @@ impl DeviceContext {
     /// Resolve context from a connected device.
     ///
     /// If `force_schema` is false (the common case), schema extraction is
-    /// skipped when a hardcoded profile exists — avoiding a multi-second USB
-    /// round-trip on first run with known devices.
+    /// skipped when a hardcoded profile exists and the firmware uses the
+    /// header layout the profile's offsets were measured on — avoiding a
+    /// multi-second USB round-trip on first run with known devices.
     ///
-    /// Returns `Err(UnsupportedDevice)` if no profile exists and schema
-    /// extraction also failed — the device cannot be operated safely.
+    /// Returns `Err(UnsupportedDevice)` if neither the schema nor a usable
+    /// profile supplies offsets — the device cannot be operated safely.
     pub fn resolve(device: &impl ScarlettDevice, force_schema: bool) -> crate::error::Result<Self> {
         Self::resolve_at(device, force_schema, None)
     }
@@ -40,8 +41,11 @@ impl DeviceContext {
         cache_path: Option<&std::path::Path>,
     ) -> crate::error::Result<Self> {
         let profile = models::detect_model(device.info().model());
+        // Profile offsets were measured on firmware 2.x; on any other layout
+        // they land on unrelated members, so only the schema can supply them.
+        let profile_offsets_usable = device.info().header_layout == HeaderLayout::V2;
 
-        let schema = if force_schema || profile.is_none() {
+        let schema = if force_schema || profile.is_none() || !profile_offsets_usable {
             match cache_path {
                 Some(path) => schema::extract_or_cached_at(device, path),
                 None => schema::extract_or_cached(device),
@@ -55,7 +59,7 @@ impl DeviceContext {
 
         let offsets = if let Some(ref sc) = schema {
             DeviceOffsets::from_schema(sc)
-        } else if let Some(p) = profile {
+        } else if let Some(p) = profile.filter(|_| profile_offsets_usable) {
             // The profile carries its own offsets. A shared default here would
             // hand every profiled model the 2i2's, which is wrong the moment a
             // second profile exists.
@@ -214,6 +218,50 @@ mod tests {
         assert_eq!(ctx.offsets.direct_led_count, 32);
         assert_eq!(ctx.offsets.direct_led_colour, 80);
         assert_eq!(ctx.offsets.selected_input, None);
+    }
+
+    fn on_layout(mut dev: MockDevice, layout: HeaderLayout) -> MockDevice {
+        dev.info_mut().header_layout = layout;
+        dev
+    }
+
+    /// Firmware 3.x moved every APP_SPACE member, so a profiled device on it
+    /// must read its offsets from the schema even without `force_schema`.
+    #[test]
+    fn firmware_3_profiled_device_takes_offsets_from_the_schema() {
+        let dir = tempfile::tempdir().unwrap();
+        let dev = on_layout(
+            mock_with_schema("Scarlett 2i2 4th Gen-00031337"),
+            HeaderLayout::V3,
+        );
+        let ctx =
+            DeviceContext::resolve_at(&dev, false, Some(&dir.path().join("schema.json"))).unwrap();
+
+        assert!(
+            ctx.profile.is_some(),
+            "the profile still supplies LED indices"
+        );
+        let schema = ctx.schema.as_ref().expect("V3 must extract the schema");
+        let expected = DeviceOffsets::from_schema(schema);
+        assert_eq!(ctx.offsets.direct_led_colour, expected.direct_led_colour);
+        assert_eq!(ctx.offsets.direct_led_index, expected.direct_led_index);
+        assert_eq!(ctx.offsets.selected_input, expected.selected_input);
+    }
+
+    /// The 2.x offsets on 3.x firmware would write directLEDColour over
+    /// instInput/inputAir, so a failed schema read must refuse, not fall back.
+    #[test]
+    fn non_v2_layout_never_falls_back_to_profile_offsets() {
+        for layout in [HeaderLayout::V3, HeaderLayout::Unknown] {
+            let dir = tempfile::tempdir().unwrap();
+            let dev = on_layout(mock_with_name("Scarlett 2i2 4th Gen-00031337"), layout);
+            let err = DeviceContext::resolve_at(&dev, false, Some(&dir.path().join("schema.json")))
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("Unsupported device"),
+                "{layout:?}: expected UnsupportedDevice, got: {err}"
+            );
+        }
     }
 
     #[test]

@@ -72,6 +72,9 @@ pub(super) struct StatusOutput {
 pub(super) struct DeviceStatusJson {
     pub model: String,
     pub firmware: String,
+    /// Descriptor layout the header was read with: decides whether the model
+    /// profile's offsets apply or the schema's are needed.
+    pub firmware_layout: String,
     pub serial: Option<String>,
     pub path: String,
     pub led_support: Option<String>,
@@ -389,13 +392,14 @@ mod json_struct_tests {
         let dev = DeviceStatusJson {
             model: "Test".into(),
             firmware: "1.0".into(),
+            firmware_layout: "2.x layout".into(),
             serial: None,
             path: "test://".into(),
             led_support: None,
         };
         let json = serde_json::to_value(&dev).unwrap();
         let obj = json.as_object().unwrap();
-        assert_eq!(obj.len(), 5, "DeviceStatusJson should have 5 fields");
+        assert_eq!(obj.len(), 6, "DeviceStatusJson should have 6 fields");
     }
 }
 
@@ -432,6 +436,7 @@ mod json_output_tests {
             device: Some(DeviceStatusJson {
                 model: "Scarlett 2i2 4th Gen".into(),
                 firmware: "2.0.2417.0".into(),
+                firmware_layout: "2.x layout".into(),
                 serial: Some("ABC123".into()),
                 path: "test://path".into(),
                 led_support: Some("profile: verified (2 inputs, 40 LEDs)".into()),

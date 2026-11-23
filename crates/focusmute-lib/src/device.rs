@@ -55,13 +55,49 @@ pub struct DeviceInfo {
     /// Raw USB_INIT response (up to 100 bytes).
     #[serde(skip)]
     pub init_raw: Vec<u8>,
-    /// Device name from descriptor (offset 16, 32 bytes), e.g. "Scarlett 2i2 4th Gen-0003186a"
+    /// Device name from the descriptor header, e.g. "Scarlett 2i2 4th Gen-0003186a"
     pub device_name: String,
     /// Firmware version fields from descriptor header.
     pub firmware: FirmwareVersion,
+    /// Which header layout `device_name` and `firmware` were read with.
+    #[serde(skip)]
+    pub header_layout: HeaderLayout,
     /// Serial number (from USB device instance ID, if available).
     pub serial: Option<String>,
 }
+
+/// APP_SPACE header layout. Firmware 3.x prepends new members, moving the
+/// version block from offset 4 to 20, `name` from 16 to 40, and everything
+/// after it by 24 bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeaderLayout {
+    /// Firmware 2.x: the layout every `ModelProfile`'s offsets were measured on.
+    V2,
+    /// Firmware 3.x (first seen on 3.0.2452.0).
+    V3,
+    /// No known layout held a product name, or the header was unreadable.
+    Unknown,
+}
+
+impl std::fmt::Display for HeaderLayout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            HeaderLayout::V2 => "2.x layout",
+            HeaderLayout::V3 => "3.x layout",
+            HeaderLayout::Unknown => "unknown layout",
+        })
+    }
+}
+
+/// Bytes to read from descriptor offset 0 to cover the header in every layout.
+pub const HEADER_LEN: u32 = 72;
+
+/// `(layout, versionMajor offset, name offset)`, from each firmware's schema.
+const HEADER_LAYOUTS: [(HeaderLayout, usize, usize); 2] =
+    [(HeaderLayout::V2, 4, 16), (HeaderLayout::V3, 20, 40)];
+
+const VERSION_LEN: usize = 12;
+const NAME_LEN: usize = 32;
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct FirmwareVersion {
@@ -82,25 +118,25 @@ impl std::fmt::Display for FirmwareVersion {
 }
 
 impl FirmwareVersion {
-    /// Returns true if all version fields are zero (uninitialized/unreadable).
-    pub fn is_zero(&self) -> bool {
-        self.major == 0 && self.minor == 0 && self.stage_release == 0 && self.build_nr == 0
-    }
-
-    /// Parse firmware version from a 16-byte descriptor header.
+    /// Parse the 12-byte version block that starts at `versionMajor`.
     ///
-    /// Layout: `[u32 unknown][u16 major][u16 minor][u32 stage_release][u32 build_nr]`
-    pub fn from_descriptor_bytes(hdr: &[u8]) -> Self {
-        if hdr.len() < 16 {
+    /// Layout: `[u16 major][u16 minor][u32 stage_release][u32 build_nr]`
+    pub fn from_version_bytes(b: &[u8]) -> Self {
+        if b.len() < VERSION_LEN {
             return FirmwareVersion::default();
         }
         FirmwareVersion {
-            major: u16::from_le_bytes(hdr[4..6].try_into().unwrap_or_default()),
-            minor: u16::from_le_bytes(hdr[6..8].try_into().unwrap_or_default()),
-            stage_release: u32::from_le_bytes(hdr[8..12].try_into().unwrap_or_default()),
-            build_nr: u32::from_le_bytes(hdr[12..16].try_into().unwrap_or_default()),
+            major: u16::from_le_bytes(b[0..2].try_into().unwrap_or_default()),
+            minor: u16::from_le_bytes(b[2..4].try_into().unwrap_or_default()),
+            stage_release: u32::from_le_bytes(b[4..8].try_into().unwrap_or_default()),
+            build_nr: u32::from_le_bytes(b[8..12].try_into().unwrap_or_default()),
         }
     }
+}
+
+/// Every 4th Gen Scarlett names itself "Scarlett <model> 4th Gen-<serial>".
+fn is_product_name(name: &str) -> bool {
+    name.starts_with("Scarlett ") && name.bytes().all(|b| b.is_ascii_graphic() || b == b' ')
 }
 
 /// Parse a null-terminated device name from raw descriptor bytes.
@@ -119,6 +155,27 @@ impl DeviceInfo {
         } else {
             0
         }
+    }
+
+    /// Set `header_layout`, `firmware` and `device_name` from the first
+    /// [`HEADER_LEN`] descriptor bytes, using the first layout whose `name`
+    /// field holds a product name. Leaves them untouched if none does.
+    pub fn apply_header(&mut self, hdr: &[u8]) {
+        for (layout, version_at, name_at) in HEADER_LAYOUTS {
+            let Some(name_bytes) = hdr.get(name_at..name_at + NAME_LEN) else {
+                continue;
+            };
+            let name = parse_device_name(name_bytes);
+            if !is_product_name(&name) {
+                continue;
+            }
+            self.header_layout = layout;
+            self.firmware =
+                FirmwareVersion::from_version_bytes(&hdr[version_at..version_at + VERSION_LEN]);
+            self.device_name = name;
+            return;
+        }
+        log::warn!("[device] unrecognised descriptor header; firmware version and name unknown");
     }
 
     /// Model name extracted from device_name (before the last dash-serial suffix).
@@ -725,25 +782,16 @@ mod windows_impl {
                     init_raw,
                     device_name: String::new(),
                     firmware: FirmwareVersion::default(),
+                    header_layout: HeaderLayout::Unknown,
                     serial,
                 },
                 token,
                 io_tx,
             };
 
-            // Read firmware version from descriptor header (offset 0, 16 bytes)
-            if let Ok(hdr) = dev.get_descriptor(0, 16) {
-                dev.info.firmware = FirmwareVersion::from_descriptor_bytes(&hdr);
-            }
-            if dev.info.firmware.is_zero() {
-                log::warn!(
-                    "[device] firmware version defaulted to 0.0.0.0 — descriptor may be unreadable"
-                );
-            }
-
-            // Read device name from descriptor (offset 16, 32 bytes)
-            if let Ok(name_bytes) = dev.get_descriptor(16, 32) {
-                dev.info.device_name = parse_device_name(&name_bytes);
+            match dev.get_descriptor(0, HEADER_LEN) {
+                Ok(hdr) => dev.info.apply_header(&hdr),
+                Err(e) => log::warn!("[device] descriptor header unreadable: {e}"),
             }
 
             Ok(dev)
@@ -1109,6 +1157,7 @@ mod linux_impl {
                     init_raw: vec![],
                     device_name: product,
                     firmware: FirmwareVersion::default(),
+                    header_layout: HeaderLayout::Unknown,
                     serial,
                 },
                 seq: AtomicU16::new(1), // set to 1 before init steps
@@ -1127,19 +1176,9 @@ mod linux_impl {
             // Save INIT_2 response (needed by DeviceInfo for token, etc.)
             dev.info.init_raw = init2_resp;
 
-            // Read firmware version from descriptor header (offset 0, 16 bytes)
-            if let Ok(hdr) = dev.get_descriptor(0, 16) {
-                dev.info.firmware = FirmwareVersion::from_descriptor_bytes(&hdr);
-            }
-            if dev.info.firmware.is_zero() {
-                log::warn!(
-                    "[device] firmware version defaulted to 0.0.0.0 — descriptor may be unreadable"
-                );
-            }
-
-            // Read device name from descriptor (offset 16, 32 bytes)
-            if let Ok(name_bytes) = dev.get_descriptor(16, 32) {
-                dev.info.device_name = parse_device_name(&name_bytes);
+            match dev.get_descriptor(0, HEADER_LEN) {
+                Ok(hdr) => dev.info.apply_header(&hdr),
+                Err(e) => log::warn!("[device] descriptor header unreadable: {e}"),
             }
 
             Ok(dev)
@@ -1457,6 +1496,7 @@ pub mod mock {
                         stage_release: 3,
                         build_nr: 4,
                     },
+                    header_layout: HeaderLayout::V2,
                     serial: Some("MOCK123".into()),
                 },
                 descriptors: RefCell::new(HashMap::new()),
@@ -1607,6 +1647,7 @@ mod tests {
                 stage_release: 2417,
                 build_nr: 0,
             },
+            header_layout: HeaderLayout::Unknown,
             serial: Some("ABC123".into()),
         };
         let json = serde_json::to_string(&info).expect("serialize DeviceInfo");
@@ -1665,6 +1706,7 @@ mod tests {
             init_raw: vec![],
             device_name: String::new(),
             firmware: FirmwareVersion::default(),
+            header_layout: HeaderLayout::Unknown,
             serial: None,
         };
         assert_eq!(info.token(), 0xDEAD_BEEF_CAFE_BABE);
@@ -1678,6 +1720,7 @@ mod tests {
             init_raw: vec![],
             device_name: String::new(),
             firmware: FirmwareVersion::default(),
+            header_layout: HeaderLayout::Unknown,
             serial: None,
         };
         assert_eq!(info.token(), 0);
@@ -1691,6 +1734,7 @@ mod tests {
             init_raw: vec![],
             device_name: String::new(),
             firmware: FirmwareVersion::default(),
+            header_layout: HeaderLayout::Unknown,
             serial: None,
         };
         assert_eq!(info.token(), 0);
@@ -1706,6 +1750,7 @@ mod tests {
             init_raw: vec![],
             device_name: "Scarlett 2i2 4th Gen-0003186a".into(),
             firmware: FirmwareVersion::default(),
+            header_layout: HeaderLayout::Unknown,
             serial: None,
         };
         assert_eq!(info.model(), "Scarlett 2i2 4th Gen");
@@ -1719,6 +1764,7 @@ mod tests {
             init_raw: vec![],
             device_name: "Scarlett Solo".into(),
             firmware: FirmwareVersion::default(),
+            header_layout: HeaderLayout::Unknown,
             serial: None,
         };
         assert_eq!(info.model(), "Scarlett Solo");
@@ -1732,6 +1778,7 @@ mod tests {
             init_raw: vec![],
             device_name: String::new(),
             firmware: FirmwareVersion::default(),
+            header_layout: HeaderLayout::Unknown,
             serial: None,
         };
         assert_eq!(info.model(), "");
@@ -1745,6 +1792,7 @@ mod tests {
             init_raw: vec![],
             device_name: "  Scarlett 2i2  -serial".into(),
             firmware: FirmwareVersion::default(),
+            header_layout: HeaderLayout::Unknown,
             serial: None,
         };
         assert_eq!(info.model(), "Scarlett 2i2");
@@ -1758,6 +1806,7 @@ mod tests {
             init_raw: vec![],
             device_name: "Scarlett 4i4-Pro-0003186a".into(),
             firmware: FirmwareVersion::default(),
+            header_layout: HeaderLayout::Unknown,
             serial: None,
         };
         assert_eq!(info.model(), "Scarlett 4i4-Pro");
@@ -1771,80 +1820,131 @@ mod tests {
             init_raw: vec![],
             device_name: "-".into(),
             firmware: FirmwareVersion::default(),
+            header_layout: HeaderLayout::Unknown,
             serial: None,
         };
         assert_eq!(info.model(), "");
     }
 
-    // ── FirmwareVersion::is_zero ──
+    // ── FirmwareVersion::from_version_bytes ──
 
     #[test]
-    fn firmware_is_zero_all_zeroes() {
-        assert!(FirmwareVersion::default().is_zero());
+    fn firmware_from_version_bytes_valid() {
+        let mut b = [0u8; 12];
+        b[0..2].copy_from_slice(&2u16.to_le_bytes());
+        b[4..8].copy_from_slice(&2417u32.to_le_bytes());
+        b[8..12].copy_from_slice(&7u32.to_le_bytes());
+        assert_eq!(
+            FirmwareVersion::from_version_bytes(&b).to_string(),
+            "2.0.2417.7"
+        );
     }
 
     #[test]
-    fn firmware_is_zero_nonzero_major() {
-        let v = FirmwareVersion {
-            major: 1,
-            ..Default::default()
-        };
-        assert!(!v.is_zero());
+    fn firmware_from_version_bytes_short() {
+        assert_eq!(
+            FirmwareVersion::from_version_bytes(&[1; 11]).to_string(),
+            "0.0.0.0"
+        );
     }
 
     #[test]
-    fn firmware_is_zero_nonzero_build_nr() {
-        let v = FirmwareVersion {
-            build_nr: 1,
-            ..Default::default()
-        };
-        assert!(!v.is_zero());
+    fn firmware_from_version_bytes_empty() {
+        assert_eq!(
+            FirmwareVersion::from_version_bytes(&[]).to_string(),
+            "0.0.0.0"
+        );
+    }
+
+    // ── DeviceInfo::apply_header ──
+
+    /// Firmware 3.0.2452.0 header, read from a Scarlett 2i2 4th Gen.
+    const HEADER_FW3: [u8; 72] = [
+        0xDC, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x02, 0x16, 0x00, 0x40, 0x06, 0x00,
+        0x00, 0x9A, 0x99, 0x19, 0x00, 0x03, 0x00, 0x00, 0x00, 0x94, 0x09, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x0E, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, b'S', b'c', b'a', b'r', b'l',
+        b'e', b't', b't', b' ', b'2', b'i', b'2', b' ', b'4', b't', b'h', b' ', b'G', b'e', b'n',
+        b'-', b'0', b'0', b'0', b'3', b'1', b'8', b'6', b'a', 0x00, 0x00, 0x00,
+    ];
+
+    /// Firmware 2.0.2417.0 header (docs/12-transact-protocol-decoded.md).
+    fn header_fw2() -> [u8; 72] {
+        let mut h = [0u8; 72];
+        h[0..4].copy_from_slice(&720u32.to_le_bytes());
+        h[4..6].copy_from_slice(&2u16.to_le_bytes());
+        h[8..12].copy_from_slice(&2417u32.to_le_bytes());
+        let name = b"Scarlett 2i2 4th Gen-0003186a";
+        h[16..16 + name.len()].copy_from_slice(name);
+        h
+    }
+
+    fn info_named(device_name: &str) -> DeviceInfo {
+        DeviceInfo {
+            path: String::new(),
+            config_raw: vec![],
+            init_raw: vec![],
+            device_name: device_name.into(),
+            firmware: FirmwareVersion::default(),
+            header_layout: HeaderLayout::Unknown,
+            serial: None,
+        }
     }
 
     #[test]
-    fn firmware_is_zero_all_max_values() {
-        let v = FirmwareVersion {
-            major: u16::MAX,
-            minor: u16::MAX,
-            stage_release: u32::MAX,
-            build_nr: u32::MAX,
-        };
-        assert!(!v.is_zero());
-    }
-
-    // ── FirmwareVersion::from_descriptor_bytes ──
-
-    #[test]
-    fn firmware_from_descriptor_bytes_valid() {
-        let mut hdr = [0u8; 16];
-        // major=2 at offset 4-5
-        hdr[4..6].copy_from_slice(&2u16.to_le_bytes());
-        // minor=0 at offset 6-7
-        hdr[6..8].copy_from_slice(&0u16.to_le_bytes());
-        // stage_release=2417 at offset 8-11
-        hdr[8..12].copy_from_slice(&2417u32.to_le_bytes());
-        // build_nr=0 at offset 12-15
-        hdr[12..16].copy_from_slice(&0u32.to_le_bytes());
-
-        let fw = FirmwareVersion::from_descriptor_bytes(&hdr);
-        assert_eq!(fw.major, 2);
-        assert_eq!(fw.minor, 0);
-        assert_eq!(fw.stage_release, 2417);
-        assert_eq!(fw.build_nr, 0);
-        assert_eq!(fw.to_string(), "2.0.2417.0");
+    fn apply_header_firmware_2_layout() {
+        let mut info = info_named("");
+        info.apply_header(&header_fw2());
+        assert_eq!(info.header_layout, HeaderLayout::V2);
+        assert_eq!(info.firmware.to_string(), "2.0.2417.0");
+        assert_eq!(info.device_name, "Scarlett 2i2 4th Gen-0003186a");
+        assert_eq!(info.model(), "Scarlett 2i2 4th Gen");
     }
 
     #[test]
-    fn firmware_from_descriptor_bytes_short() {
-        let hdr = [0u8; 8]; // too short
-        let fw = FirmwareVersion::from_descriptor_bytes(&hdr);
-        assert_eq!(fw.to_string(), "0.0.0.0");
+    fn apply_header_firmware_3_layout() {
+        // The bug: the 2.x offsets read clipSafeParams as the version
+        // (0.0.1442310.1600) and non-ASCII bytes as the name.
+        let mut info = info_named("");
+        info.apply_header(&HEADER_FW3);
+        assert_eq!(info.header_layout, HeaderLayout::V3);
+        assert_eq!(info.firmware.to_string(), "3.0.2452.0");
+        assert_eq!(info.device_name, "Scarlett 2i2 4th Gen-0003186a");
+        assert_eq!(info.model(), "Scarlett 2i2 4th Gen");
     }
 
     #[test]
-    fn firmware_from_descriptor_bytes_empty() {
-        let fw = FirmwareVersion::from_descriptor_bytes(&[]);
-        assert_eq!(fw.to_string(), "0.0.0.0");
+    fn apply_header_firmware_2_ignores_name_tail_at_firmware_3_offset() {
+        // Offset 40 of a 2.x header holds the printable tail "3186a".
+        let hdr = header_fw2();
+        assert_eq!(parse_device_name(&hdr[40..72]), "3186a");
+        assert!(!is_product_name("3186a"));
+    }
+
+    #[test]
+    fn apply_header_unrecognised_leaves_info_untouched() {
+        // Linux pre-fills the USB product string; an unknown header keeps it.
+        let mut info = info_named("Scarlett 2i2 4th Gen");
+        info.apply_header(&[0xFF; 72]);
+        assert_eq!(info.header_layout, HeaderLayout::Unknown);
+        assert_eq!(info.firmware.to_string(), "0.0.0.0");
+        assert_eq!(info.device_name, "Scarlett 2i2 4th Gen");
+    }
+
+    #[test]
+    fn apply_header_short_read_is_unknown() {
+        let mut info = info_named("");
+        info.apply_header(&header_fw2()[..40]);
+        assert_eq!(info.header_layout, HeaderLayout::Unknown);
+        info.apply_header(&[]);
+        assert_eq!(info.header_layout, HeaderLayout::Unknown);
+    }
+
+    #[test]
+    fn is_product_name_rejects_non_ascii_and_empty() {
+        assert!(is_product_name("Scarlett Solo 4th Gen-00012345"));
+        assert!(!is_product_name(""));
+        assert!(!is_product_name("Scarlett \u{FFFD}"));
+        assert!(!is_product_name("Scarlett\t2i2"));
     }
 
     // ── parse_device_name ──

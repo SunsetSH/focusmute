@@ -61,6 +61,7 @@ fn collect_device_status(dev: &impl ScarlettDevice) -> DeviceStatusJson {
     DeviceStatusJson {
         model: info.model().to_string(),
         firmware: info.firmware.to_string(),
+        firmware_layout: info.header_layout.to_string(),
         serial: info.serial.clone(),
         path: info.path.clone(),
         led_support,
@@ -126,7 +127,11 @@ fn print_status(
         Some(dev) => {
             kv("Device:", "CONNECTED", w);
             kv_indent("Model:", &dev.model, w);
-            kv_indent("Firmware:", &dev.firmware, w);
+            kv_indent(
+                "Firmware:",
+                format_args!("{} ({})", dev.firmware, dev.firmware_layout),
+                w,
+            );
             if let Some(ref serial) = dev.serial {
                 kv_indent("Serial:", serial, w);
             }

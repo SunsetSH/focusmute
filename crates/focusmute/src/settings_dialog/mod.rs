@@ -104,7 +104,10 @@ pub fn show_settings(
         let mut device_lines: Vec<(String, String)> = Vec::new();
         if let Some(info) = device_info {
             device_lines.push(("Device".into(), info.model().to_string()));
-            device_lines.push(("Firmware".into(), info.firmware.to_string()));
+            device_lines.push((
+                "Firmware".into(),
+                format!("{} ({})", info.firmware, info.header_layout),
+            ));
             if let Some(ref serial) = info.serial {
                 device_lines.push(("Serial".into(), serial.clone()));
             }

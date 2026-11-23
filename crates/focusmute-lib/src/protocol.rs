@@ -13,7 +13,7 @@
 //! The following are **confirmed only on the Scarlett 2i2 4th Gen** and may
 //! differ on Solo, 4i4, 8i6, 16i16, and 18i20:
 //! - `DIRECT_LED_COUNT` (40) — other models likely have different LED counts
-//! - `DESCRIPTOR_SIZE` (720) — total descriptor size
+//! - `DESCRIPTOR_SIZE` (720) — total descriptor size on firmware 2.x (732 on 3.x)
 //! - LED index-to-physical mapping (see `OFF_DIRECT_LED_VALUES` doc comment)
 
 // ── IOCTL codes ──
@@ -196,7 +196,7 @@ pub fn swroot_to_usb_cmd(swroot_cmd: u32) -> Option<u32> {
     }
 }
 
-// ── Descriptor offsets (Scarlett 4th Gen, shared across models) ──
+// ── Descriptor offsets (Scarlett 2i2 4th Gen, firmware 2.x; 3.x moves them, see `HeaderLayout`) ──
 
 /// `enableDirectLEDMode` — u8 at this offset. 0=normal, 2=halo override.
 pub const OFF_ENABLE_DIRECT_LED: u32 = 77;
@@ -243,24 +243,6 @@ pub const DIRECT_LED_COUNT: usize = 40;
 /// Size of directLEDValues in bytes (40 * 4).
 pub const DIRECT_LED_SIZE: u32 = (DIRECT_LED_COUNT * 4) as u32;
 
-/// `parameterValue` — u8 at this offset. Used by parameter-buffer mechanism.
-pub const OFF_PARAMETER_VALUE: u32 = 252;
-
-/// `parameterChannel` — u8 at this offset. FCP message type for parameter-buffer writes.
-pub const OFF_PARAMETER_CHANNEL: u32 = 253;
-
-/// `inputTRSPresent` — u8[2] starting at this offset. Per-channel jack detection.
-/// 1 = cable detected, 0 = no cable.
-/// Notification: IOCTL_NOTIFY bit 0x20000000 (FCP_NOTIFY_TRS_INPUT_CHANGE).
-/// Despite the name, combo jacks (XLR/TRS) likely report any insertion type.
-pub const OFF_INPUT_TRS_PRESENT: u32 = 345;
-
-/// Number of input TRS detection channels (2 on 2i2).
-pub const INPUT_TRS_COUNT: usize = 2;
-
-/// `brightness` — eBrightnessMode (u8) at this offset. 0=High, 1=Medium, 2=Low.
-pub const OFF_BRIGHTNESS: u32 = 711;
-
 // ── DATA_NOTIFY event IDs ──
 
 /// Notify after writing `directLEDValues`.
@@ -274,7 +256,7 @@ pub const NOTIFY_BRIGHTNESS: u32 = 37;
 
 // ── Descriptor total size ──
 
-/// Full descriptor size for a bulk read (confirmed on 2i2; may differ on other models).
+/// Full descriptor size for a bulk read (2i2 on firmware 2.x; 732 on 3.x).
 pub const DESCRIPTOR_SIZE: u32 = 720;
 
 #[cfg(test)]
@@ -346,14 +328,10 @@ mod tests {
     fn descriptor_offsets_no_overlap() {
         // enableDirectLEDMode (1 byte at 77) should not overlap directLEDValues (160 bytes at 92)
         const { assert!(OFF_ENABLE_DIRECT_LED < OFF_DIRECT_LED_VALUES) };
-        // directLEDValues (160 bytes at 92) should not overlap parameterValue (1 byte at 252)
-        const { assert!(OFF_DIRECT_LED_VALUES + DIRECT_LED_SIZE <= OFF_PARAMETER_VALUE) };
-        // parameterValue (1 byte at 252) should not overlap parameterChannel (1 byte at 253)
-        const { assert!(OFF_PARAMETER_VALUE < OFF_PARAMETER_CHANNEL) };
-        // selectedInput (1 byte at 331) should not overlap inputTRSPresent (2 bytes at 345)
-        const { assert!(OFF_SELECTED_INPUT < OFF_INPUT_TRS_PRESENT) };
-        // brightness (1 byte at 711) should fit within descriptor
-        const { assert!(OFF_BRIGHTNESS < DESCRIPTOR_SIZE) };
+        // directLEDValues (160 bytes at 92) should end before selectedInput (1 byte at 331)
+        const { assert!(OFF_DIRECT_LED_VALUES + DIRECT_LED_SIZE <= OFF_SELECTED_INPUT) };
+        // selectedInput should fit within the descriptor
+        const { assert!(OFF_SELECTED_INPUT < DESCRIPTOR_SIZE) };
     }
 
     #[test]

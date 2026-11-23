@@ -393,9 +393,10 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
         Ok(dev) => {
             let info = dev.info();
             log::info!(
-                "[device] {} (firmware {}{})",
+                "[device] {} (firmware {}, {}{})",
                 info.device_name,
                 info.firmware,
+                info.header_layout,
                 info.serial
                     .as_ref()
                     .map(|s| format!(", serial {s}"))

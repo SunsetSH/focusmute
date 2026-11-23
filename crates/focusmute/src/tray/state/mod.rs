@@ -118,6 +118,22 @@ pub fn set_autostart(enabled: bool) {
 // ── Shared helpers ──
 
 /// Resolve the mute strategy from the current config and optional device context.
+/// Say once per connect when the model's Direct gesture and LED Lab are
+/// switched off because the firmware layout is not the one they were
+/// measured on, so a missing feature is not mistaken for a broken one.
+fn log_withheld_panel(device: &impl ScarlettDevice) {
+    let info = device.info();
+    if focusmute_lib::models::detect_model(info.model()).is_some_and(|p| p.panel.is_some())
+        && focusmute_lib::models::panel(info).is_none()
+    {
+        log::warn!(
+            "[device] Direct gesture and LED Lab are off on firmware {} ({}):              their offsets are verified on 2.x only",
+            info.firmware,
+            info.header_layout
+        );
+    }
+}
+
 fn resolve_strategy(
     config: &mut Config,
     ctx: Option<&DeviceContext>,
@@ -158,6 +174,7 @@ impl TrayState {
         let init_mute_color = led::mute_color_or_default(&config);
 
         let ctx = DeviceContext::resolve(device, false)?;
+        log_withheld_panel(device);
 
         let (strategy, warnings) = resolve_strategy(&mut config, Some(&ctx))
             .map_err(focusmute_lib::FocusmuteError::Config)?;
@@ -220,6 +237,7 @@ impl TrayState {
         device: &impl ScarlettDevice,
     ) -> focusmute_lib::error::Result<Vec<String>> {
         let ctx = DeviceContext::resolve(device, false)?;
+        log_withheld_panel(device);
 
         let (strategy, warnings) = resolve_strategy(&mut self.config, Some(&ctx))
             .map_err(focusmute_lib::FocusmuteError::Config)?;
