@@ -57,7 +57,7 @@ sudo apt-get install gcc-mingw-w64-x86-64
 
 **Linux native prerequisites** (PulseAudio + GTK + tray dependencies):
 ```
-sudo apt-get install libpulse-dev pkg-config libasound2-dev libgtk-3-dev libxdo-dev libappindicator3-dev libssl-dev
+sudo apt-get install libpulse-dev pkg-config libasound2-dev libgtk-3-dev libappindicator3-dev libssl-dev
 ```
 
 ### Build Outputs
@@ -154,7 +154,7 @@ Triggers on push to `main` and all pull requests.
 |-----|--------|--------------|
 | `check` | `ubuntu-latest` | `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo-deny-action` (advisory audit), `cargo test` |
 
-Installs `libpulse-dev`, `pkg-config`, `libasound2-dev`, `libgtk-3-dev`, `libxdo-dev`, `libappindicator3-dev` so clippy can analyze all platform code paths. Uses `EmbarkStudios/cargo-deny-action@v2` for dependency audit (no separate install step needed).
+Installs `libpulse-dev`, `pkg-config`, `libasound2-dev`, `libgtk-3-dev`, `libappindicator3-dev` so clippy can analyze all platform code paths. Uses `EmbarkStudios/cargo-deny-action@v2` for dependency audit (no separate install step needed).
 
 ### Release Workflow (`.github/workflows/release.yml`)
 

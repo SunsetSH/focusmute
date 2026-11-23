@@ -101,7 +101,7 @@ button». Это функция только Windows + Solo и выключен�
 ```bash
 sudo apt-get update
 sudo apt-get install build-essential pkg-config libpulse-dev libasound2-dev \
-  libgtk-3-dev libxdo-dev libappindicator3-dev libssl-dev
+  libgtk-3-dev libappindicator3-dev libssl-dev
 rustup toolchain install stable
 cargo test --locked --workspace
 cargo build --release --locked --workspace

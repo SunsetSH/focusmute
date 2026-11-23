@@ -4,6 +4,10 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    ignore:
+      # Has to match the `windows` crate's version; bump the pair by hand.
+      - dependency-name: windows-core
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
     groups:
       cargo-security:
         applies-to: security-updates
@@ -14,7 +18,9 @@ updates:
         patterns:
           - "*"
   - package-ecosystem: github-actions
-    directory: "/"
+    directories:
+      - "/"
+      - "/.github/actions/*"
     schedule:
       interval: weekly
     groups:
