@@ -16,6 +16,8 @@ Windows review in docs/23 and docs/24.
 - Scarlett Solo 4th Gen model profile, verified on this project's device: numbers 4 and 12, Output 24–25, offsets from the Solo's own firmware schema. The Solo no longer reads its schema from the device at startup
 - Firmware 3.x support: the descriptor header is read in one request and recognised in both the 2.x and 3.x layouts. On 3.x the LED offsets come from the device schema; the device is refused rather than written at 2.x offsets if the schema cannot be read. `status`, About and the log show the layout next to the firmware version
 - The tray tooltip names the microphone the mute applies to, and says when the Scarlett is disconnected
+- The tray menu shows the mute state, the microphone and the connected Scarlett on their own lines. "No microphone" and a pending switch to a new default microphone are shown in the menu and the tooltip
+- Settings → System → "Always mute the Scarlett microphone" (`system.scarlett_microphone`, Windows): mute goes to the Focusrite input even when Windows uses another microphone by default, falls back to the default microphone while the Scarlett is unplugged and returns to it when it is back. `focusmute-cli mute`, `status` and `monitor` follow the same option
 
 ### Changed
 
@@ -34,6 +36,7 @@ Windows review in docs/23 and docs/24.
 - A Focusrite arrival now triggers an immediate reconnect. A removal event is checked against the open handle (its descriptor header must still name the device), so an event for another interface or an earlier session no longer drops a working handle, and a real unplug during a reconnect is still caught. A context failure after opening keeps the reconnect backoff. Without a device the loop sleeps until the next attempt instead of waking every 50 ms
 - When Windows moves the default microphone and FocusMute cannot open it yet, commands are refused instead of muting the microphone that is no longer the default; a hotkey, the tray toggle or browser sync retries the switch at once, and the user is told why if it still fails. Exit still unmutes the microphone FocusMute muted. Samples of the previous microphone are told apart by a generation counter, so a toggle right after a switch shows at once, and a pending toggle does not carry over to the new microphone
 - A shortcut that fails to register is not saved, and a failed push-to-talk change keeps the old one
+- The tray tooltip and all desktop notifications follow the interface language
 - With autostart on, the login entry follows a moved portable EXE
 - udev rules file: removed a UTF-8 BOM and a joined comment line
 

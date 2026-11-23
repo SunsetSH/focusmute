@@ -39,7 +39,7 @@ impl PlatformAdapter for LinuxAdapter {
         Ok(())
     }
 
-    fn create_monitor() -> Option<PulseAudioMonitor> {
+    fn create_monitor(_prefer_scarlett: bool) -> Option<PulseAudioMonitor> {
         match PulseAudioMonitor::new() {
             Ok(m) => {
                 log::info!("[audio] PulseAudio mute monitor ready");

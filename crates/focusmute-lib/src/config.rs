@@ -181,6 +181,12 @@ pub struct SystemConfig {
     /// User interface language: `en` or `ru`.
     #[serde(default = "default_language")]
     pub language: String,
+
+    /// Mute the Scarlett's own input even when Windows uses another
+    /// microphone by default. Without an active Focusrite input the Windows
+    /// default microphone is muted. Windows only. Default: false.
+    #[serde(default)]
+    pub scarlett_microphone: bool,
 }
 
 impl Default for SystemConfig {
@@ -193,6 +199,7 @@ impl Default for SystemConfig {
             browser_sync_port: 0,
             browser_sync_reverse: false,
             language: default_language(),
+            scarlett_microphone: false,
         }
     }
 }
@@ -408,6 +415,7 @@ impl From<LegacyConfig> for Config {
                 browser_sync_port: default_browser_sync_port(),
                 browser_sync_reverse: false,
                 language: default_language(),
+                scarlett_microphone: false,
             },
             hooks: HooksConfig {
                 on_mute_url: legacy.on_mute_command,

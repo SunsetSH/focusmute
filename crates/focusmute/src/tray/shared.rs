@@ -30,9 +30,10 @@ pub trait PlatformAdapter {
     /// One-time platform init (GTK, COM, etc.). Called before anything else.
     fn platform_init() -> focusmute_lib::error::Result<()>;
 
-    /// Create the audio mute monitor on the **main thread**.
+    /// Create the audio mute monitor on the **main thread**, on the
+    /// Scarlett's input with `prefer_scarlett` where the platform can choose.
     /// Returns `None` if the audio subsystem is unavailable.
-    fn create_monitor() -> Option<Self::Monitor>;
+    fn create_monitor(prefer_scarlett: bool) -> Option<Self::Monitor>;
 
     /// Spawn the background polling thread.
     /// The thread should call `monitor.wait_for_change()` / `refresh()` / `is_muted()`
@@ -320,7 +321,6 @@ impl MuteIntent {
 fn adopt_mute_state(
     state: &mut TrayState,
     device: Option<&impl ScarlettDevice>,
-    tray: &tray_icon::TrayIcon,
     tray_menu: &state::TrayMenu,
     muted: bool,
 ) {
@@ -338,7 +338,7 @@ fn adopt_mute_state(
             log::warn!("[mute] could not update LEDs for the new microphone: {e}");
         }
     }
-    state::show_mute_state(tray, tray_menu, state, muted, device.is_some());
+    tray_menu.set_muted(muted);
 }
 
 /// Mute state the tray keeps about the microphone being watched.
@@ -360,7 +360,6 @@ fn follow_default_mic<M: MuteMonitor + ?Sized>(
     retry_now: bool,
     state: &mut TrayState,
     device: Option<&impl ScarlettDevice>,
-    tray: &tray_icon::TrayIcon,
     tray_menu: &state::TrayMenu,
     mic: &mut MicTracking,
 ) {
@@ -368,19 +367,30 @@ fn follow_default_mic<M: MuteMonitor + ?Sized>(
         return;
     }
     let muted = monitor.is_muted();
-    state.mic_name = monitor.device_name();
     mic.preexisting_mute = muted;
     mic.intent.forget();
-    adopt_mute_state(state, device, tray, tray_menu, muted);
+    adopt_mute_state(state, device, tray_menu, muted);
 }
 
 /// Tell the user once per stale period why a command did nothing.
-fn report_stale_mic<M: MuteMonitor + ?Sized>(monitor: &M, mic: &mut MicTracking) {
+fn report_stale_mic<M: MuteMonitor + ?Sized>(monitor: &M, mic: &mut MicTracking, language: &str) {
     if monitor.is_stale() && !mic.stale_notified {
         mic.stale_notified = true;
-        crate::notification::Notifier::show_oneshot(
-            "Windows switched the default microphone, but it is not ready yet. FocusMute keeps trying.",
-        );
+        crate::notification::Notifier::show_oneshot(crate::i18n::tr(
+            language,
+            "notify_mic_not_ready",
+        ));
+    }
+}
+
+/// What the tray says about the microphone being watched.
+fn mic_status<M: MuteMonitor + ?Sized>(monitor: Option<&M>) -> state::MicStatus {
+    match monitor {
+        None => state::MicStatus::Missing,
+        Some(m) => state::MicStatus::Watching {
+            name: m.device_name(),
+            stale: m.is_stale(),
+        },
     }
 }
 
@@ -481,7 +491,7 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
         "off".to_string()
     };
     log::info!(
-        "[focusmute] v{} starting (hotkey={}, ptt={}, inputs={}, color={}, sound={}, notifications={}, log={}, sync={}, reverse={}, blink={})",
+        "[focusmute] v{} starting (hotkey={}, ptt={}, inputs={}, color={}, sound={}, notifications={}, log={}, sync={}, reverse={}, blink={}, mic={})",
         env!("CARGO_PKG_VERSION"),
         config.keyboard.hotkey,
         if config.keyboard.push_to_talk_hotkey.is_empty() {
@@ -512,6 +522,11 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
             "on"
         } else {
             "off"
+        },
+        if config.system.scarlett_microphone {
+            "scarlett"
+        } else {
+            "default"
         },
     );
     if !config.hooks.on_mute_url.trim().is_empty() || !config.hooks.on_unmute_url.trim().is_empty()
@@ -546,12 +561,12 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
 
     // Create audio monitor on the main thread. Without a capture device (an
     // autostart that beats the audio driver) it is retried from the loop.
-    let mut main_monitor: Option<Arc<P::Monitor>> = P::create_monitor().map(Arc::new);
+    let mut main_monitor: Option<Arc<P::Monitor>> =
+        P::create_monitor(state.config.system.scarlett_microphone).map(Arc::new);
     let mut monitor_retry = focusmute_lib::reconnect::ReconnectState::with_defaults();
     if main_monitor.is_none() {
         monitor_retry.record_failure();
     }
-    state.mic_name = main_monitor.as_ref().and_then(|m| m.device_name());
 
     // Check initial mute state
     let initial_muted = main_monitor.as_ref().is_some_and(|m| m.is_muted());
@@ -578,18 +593,15 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
     }
 
     // Build tray menu and icon
-    let device_connected = device.is_some();
-    let (menu, mut tray_menu) = state::build_tray_menu(&state.config, initial_muted);
-    let tray = state::build_tray_icon(initial_muted, device_connected, menu)?;
-
-    // If no device at startup, show disconnected status immediately.
-    // When connected, only update the reconnect label — the status text
-    // already reflects the initial mute state from build_tray_menu.
-    if !device_connected {
-        tray_menu.set_device_connected(false, &tray);
-    } else {
-        tray_menu.set_reconnect_label(true);
-    }
+    let (menu, mut tray_menu) = state::build_tray_menu(
+        &state.config,
+        state::TrayView {
+            muted: initial_muted,
+            mic: mic_status(main_monitor.as_deref()),
+            device: device.as_ref().map(|d| d.info().device_name.clone()),
+        },
+    );
+    state::build_tray_icon(menu, &mut tray_menu)?;
 
     // Show startup warnings (parse errors + validation errors + sound errors)
     {
@@ -614,15 +626,16 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
             }
         }
         if !all_warnings.is_empty() {
-            state::show_startup_warnings(&all_warnings);
+            state::show_startup_warnings(&state.config.system.language, &all_warnings);
         }
     }
 
     // First-run welcome notification
     if first_run {
-        let hotkey = &state.config.keyboard.hotkey;
-        crate::notification::Notifier::show_oneshot(&format!(
-            "FocusMute running. Hotkey: {hotkey}. Right-click tray icon for settings."
+        crate::notification::Notifier::show_oneshot(&crate::i18n::trf(
+            &state.config.system.language,
+            "notify_first_run",
+            &[("hotkey", &state.config.keyboard.hotkey)],
         ));
     }
 
@@ -690,14 +703,13 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
         // 1a. Microphone monitor: created late when there was no capture
         //     device at startup, re-bound when Windows picks another default.
         if main_monitor.is_none() && monitor_retry.should_attempt() {
-            match P::create_monitor() {
+            match P::create_monitor(state.config.system.scarlett_microphone) {
                 Some(m) => {
                     monitor_retry.record_success();
                     let m = Arc::new(m);
                     let muted = m.is_muted();
-                    state.mic_name = m.device_name();
                     mic.preexisting_mute = muted;
-                    adopt_mute_state(&mut state, device.as_ref(), &tray, &tray_menu, muted);
+                    adopt_mute_state(&mut state, device.as_ref(), &tray_menu, muted);
                     bg_handle = Some(P::spawn_poll_thread(Arc::clone(&m), poll_tx.clone()));
                     poll_thread_dead = false;
                     no_mic_notified = false;
@@ -707,12 +719,14 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
             }
         }
         if let Some(ref m) = main_monitor {
+            // Hot-applies the settings option; a change makes the next
+            // maintain pick the microphone again.
+            m.set_prefer_scarlett(state.config.system.scarlett_microphone);
             follow_default_mic(
                 &**m,
                 false,
                 &mut state,
                 device.as_ref(),
-                &tray,
                 &tray_menu,
                 &mut mic,
             );
@@ -720,6 +734,7 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
                 mic.stale_notified = false;
             }
         }
+        tray_menu.set_mic(mic_status(main_monitor.as_deref()));
 
         // 1b. Device removal (RegisterDeviceNotification). The event names no
         //     device and may belong to another Focusrite interface or to a
@@ -733,7 +748,7 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
             } else {
                 log::warn!("[device] removed (USB hotplug event)");
                 device = None;
-                tray_menu.set_device_connected(false, &tray);
+                tray_menu.set_device(None);
             }
         }
         // An arriving Focusrite interface makes the next attempt worth trying
@@ -755,18 +770,7 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
                 watcher.stop();
             }
             direct_last_spawn = None;
-            tray_menu.set_device_connected(true, &tray);
-            // Restore correct icon based on current mute state
-            state::set_tray_mute_state(
-                &tray,
-                state.indicator.is_muted(),
-                state.mic_name.as_deref(),
-            );
-            if state.indicator.is_muted() {
-                tray_menu
-                    .status_item
-                    .set_text(crate::i18n::tr(&state.config.system.language, "muted"));
-            }
+            tray_menu.set_device(device.as_ref().map(|d| d.info().device_name.as_str()));
         }
 
         // Direct is an opt-in gesture on models with panel controls (the
@@ -828,7 +832,7 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
                     if device_lost {
                         log::warn!("[device] disconnected (communication error)");
                         device = None;
-                        tray_menu.set_device_connected(false, &tray);
+                        tray_menu.set_device(None);
                     }
                     // Captured before the clear below: a pending flag means
                     // this transition originated in the browser.
@@ -859,11 +863,9 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
                     }
                     state::apply_mute_ui(
                         action,
-                        &tray,
                         &tray_menu,
                         &state,
                         &mut resources,
-                        device.is_some(),
                         suppress_sound,
                     );
                     // The OSD reports the microphone, so it works without
@@ -930,7 +932,6 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
                     true,
                     &mut state,
                     device.as_ref(),
-                    &tray,
                     &tray_menu,
                     &mut mic,
                 );
@@ -1020,7 +1021,6 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
                     true,
                     &mut state,
                     device.as_ref(),
-                    &tray,
                     &tray_menu,
                     &mut mic,
                 );
@@ -1054,7 +1054,7 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
                 settings_toggle_callback,
             );
             if is_toggle && let Some(ref m) = main_monitor {
-                report_stale_mic(&**m, &mut mic);
+                report_stale_mic(&**m, &mut mic, &state.config.system.language);
             }
             if quit {
                 RUNNING.store(false, Ordering::SeqCst);
@@ -1062,7 +1062,7 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
             }
             if force_reconnect {
                 device = None;
-                tray_menu.set_device_connected(false, &tray);
+                tray_menu.set_device(None);
             }
         }
 
@@ -1072,9 +1072,10 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
                 if !no_mic_notified && event.state == HotKeyState::Pressed {
                     no_mic_notified = true;
                     log::warn!("[hotkey] no microphone to mute yet");
-                    crate::notification::Notifier::show_oneshot(
-                        "No microphone found. FocusMute will pick it up when Windows reports one.",
-                    );
+                    crate::notification::Notifier::show_oneshot(crate::i18n::tr(
+                        &state.config.system.language,
+                        "notify_no_mic",
+                    ));
                 }
                 continue;
             };
@@ -1087,7 +1088,6 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
                     true,
                     &mut state,
                     device.as_ref(),
-                    &tray,
                     &tray_menu,
                     &mut mic,
                 );
@@ -1106,7 +1106,7 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
                 );
                 if let Err(e) = mic.intent.request(&**m, target_muted) {
                     log::warn!("[hotkey] failed to set mute state: {e}");
-                    report_stale_mic(&**m, &mut mic);
+                    report_stale_mic(&**m, &mut mic, &state.config.system.language);
                 }
             } else if resources.hotkey.ptt_id.is_some_and(|id| event.id == id) {
                 // PTT hotkey: press = unmute (if muted), release = re-mute (if PTT activated)
@@ -1122,7 +1122,7 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
                                 Ok(()) => ptt_active = true,
                                 Err(e) => {
                                     log::warn!("[ptt] failed to unmute: {e}");
-                                    report_stale_mic(&**m, &mut mic);
+                                    report_stale_mic(&**m, &mut mic, &state.config.system.language);
                                 }
                             }
                         } else if !ptt_noop_logged {
@@ -1136,7 +1136,7 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
                             log::info!("[ptt] released → re-muting");
                             if let Err(e) = mic.intent.request(&**m, true) {
                                 log::warn!("[ptt] failed to re-mute: {e}");
-                                report_stale_mic(&**m, &mut mic);
+                                report_stale_mic(&**m, &mut mic, &state.config.system.language);
                             }
                         }
                     }

@@ -115,6 +115,7 @@ pub struct SettingsApp {
 
     browser_sync_port: String,
     browser_sync_reverse: bool,
+    scarlett_microphone: bool,
 
     // ── Sound preview ──
     preview_player: SoundPreviewPlayer,
@@ -372,6 +373,7 @@ impl SettingsApp {
 
             browser_sync_port: config.system.browser_sync_port.to_string(),
             browser_sync_reverse: config.system.browser_sync_reverse,
+            scarlett_microphone: config.system.scarlett_microphone,
 
             preview_player: SoundPreviewPlayer::new(),
 
@@ -418,6 +420,7 @@ impl SettingsApp {
             on_unmute_body: &self.on_unmute_body,
             browser_sync_port: &self.browser_sync_port,
             browser_sync_reverse: self.browser_sync_reverse,
+            scarlett_microphone: self.scarlett_microphone,
             blink_on_talk: self.blink_on_talk,
             blink_while_muted: self.blink_while_muted,
             talk_threshold: self.talk_threshold,
@@ -600,6 +603,7 @@ impl SettingsApp {
             on_unmute_body: self.on_unmute_body.clone(),
             browser_sync_port: self.browser_sync_port.clone(),
             browser_sync_reverse: self.browser_sync_reverse,
+            scarlett_microphone: self.scarlett_microphone,
             blink_on_talk: self.blink_on_talk,
             blink_while_muted: self.blink_while_muted,
             talk_threshold: self.talk_threshold,
@@ -636,6 +640,7 @@ struct FormSnapshot {
     on_unmute_body: String,
     browser_sync_port: String,
     browser_sync_reverse: bool,
+    scarlett_microphone: bool,
     blink_on_talk: bool,
     blink_while_muted: bool,
     talk_threshold: u32,
@@ -1000,6 +1005,11 @@ impl eframe::App for SettingsApp {
                 #[cfg(not(windows))]
                 ui.checkbox(&mut self.autostart, tr("start_system"));
                 ui.checkbox(&mut self.notifications_enabled, tr("notifications"));
+                // Only WASAPI can choose the microphone; PulseAudio keeps the
+                // default source.
+                #[cfg(windows)]
+                ui.checkbox(&mut self.scarlett_microphone, tr("scarlett_mic"))
+                    .on_hover_text(tr("scarlett_mic_tip"));
                 ui.checkbox(
                     &mut self.direct_button_enabled,
                     tr("direct_button"),
@@ -1302,6 +1312,7 @@ pub(crate) struct ValidateParams<'a> {
     pub on_unmute_body: &'a str,
     pub browser_sync_port: &'a str,
     pub browser_sync_reverse: bool,
+    pub scarlett_microphone: bool,
     pub blink_on_talk: bool,
     pub blink_while_muted: bool,
     pub talk_threshold: u32,
@@ -1369,6 +1380,7 @@ pub(crate) fn build_and_validate_config(p: &ValidateParams<'_>) -> Result<Config
             browser_sync_port,
             browser_sync_reverse: p.browser_sync_reverse,
             language: p.language.to_string(),
+            scarlett_microphone: p.scarlett_microphone,
         },
         hooks: focusmute_lib::config::HooksConfig {
             on_mute_url: p.on_mute_url.to_string(),
@@ -1572,6 +1584,7 @@ mod tests {
             osd_enabled: false,
             osd_position: "bottom_center",
             browser_sync_reverse: false,
+            scarlett_microphone: false,
             blink_on_talk: false,
             blink_while_muted: false,
             talk_threshold: 250,

@@ -14,9 +14,7 @@ mod menu;
 
 pub use hotkey::{HotkeyState, register_hotkeys, reregister_ptt, reregister_toggle};
 pub(crate) use menu::show_startup_warnings;
-pub use menu::{
-    TrayMenu, apply_mute_ui, build_tray_icon, build_tray_menu, set_tray_mute_state, show_mute_state,
-};
+pub use menu::{MicStatus, TrayMenu, TrayView, apply_mute_ui, build_tray_icon, build_tray_menu};
 
 use focusmute_lib::config::Config;
 use focusmute_lib::context::DeviceContext;
@@ -220,8 +218,6 @@ pub struct TrayState {
     pub indicator: MuteIndicator,
     pub reconnect: ReconnectState,
     pub ctx: Option<DeviceContext>,
-    /// Friendly name of the microphone the mute applies to, for the tooltip.
-    pub mic_name: Option<String>,
 }
 
 impl TrayState {
@@ -255,7 +251,6 @@ impl TrayState {
             indicator,
             reconnect: ReconnectState::with_defaults(),
             ctx: Some(ctx),
-            mic_name: None,
         })
     }
 
@@ -288,7 +283,6 @@ impl TrayState {
             indicator,
             reconnect: ReconnectState::with_defaults(),
             ctx: None,
-            mic_name: None,
         }
     }
 
@@ -536,7 +530,7 @@ pub fn handle_menu_event(
             let previous_hotkey = state.config.keyboard.hotkey.clone();
             let previous_ptt = state.config.keyboard.push_to_talk_hotkey.clone();
             let changes = state.handle_settings_result(new_config, device.as_ref());
-            menu.sync_language(&state.config, device.is_some(), state.indicator.is_muted());
+            menu.sync_language(&state.config);
             for w in &changes.warnings {
                 log::warn!("[config] {w}");
             }
@@ -565,17 +559,19 @@ pub fn handle_menu_event(
             if changes.toggle_changed
                 && !reregister_toggle(&mut resources.hotkey, &changes.new_toggle_str)
             {
-                crate::notification::Notifier::show_oneshot(&format!(
-                    "Could not register hotkey \"{}\". It may be in use by another application. Keeping \"{previous_hotkey}\".",
-                    changes.new_toggle_str,
+                crate::notification::Notifier::show_oneshot(&crate::i18n::trf(
+                    &state.config.system.language,
+                    "notify_hotkey_failed",
+                    &[("new", &changes.new_toggle_str), ("old", &previous_hotkey)],
                 ));
                 state.config.keyboard.hotkey = previous_hotkey;
                 reverted = true;
             }
             if changes.ptt_changed && !reregister_ptt(&mut resources.hotkey, &changes.new_ptt_str) {
-                crate::notification::Notifier::show_oneshot(&format!(
-                    "Could not register push-to-talk hotkey \"{}\". It may be in use by another application.",
-                    changes.new_ptt_str,
+                crate::notification::Notifier::show_oneshot(&crate::i18n::trf(
+                    &state.config.system.language,
+                    "notify_ptt_failed",
+                    &[("new", &changes.new_ptt_str)],
                 ));
                 // The failed attempt dropped the old PTT registration.
                 if !reregister_ptt(&mut resources.hotkey, &previous_ptt) {
@@ -588,7 +584,7 @@ pub fn handle_menu_event(
                 if let Err(e) = state.config.save() {
                     log::warn!("[config] could not save the restored hotkeys: {e}");
                 }
-                menu.sync_language(&state.config, device.is_some(), state.indicator.is_muted());
+                menu.sync_language(&state.config);
             }
             if changes.log_level_changed {
                 log::info!("[settings] log level changing to {}", changes.new_log_level);
@@ -596,9 +592,10 @@ pub fn handle_menu_event(
             }
             if changes.browser_sync_port_changed {
                 log::info!("[settings] browser sync port changed — restart required");
-                crate::notification::Notifier::show_oneshot(
-                    "Browser sync port changed. Restart FocusMute for the change to take effect.",
-                );
+                crate::notification::Notifier::show_oneshot(crate::i18n::tr(
+                    &state.config.system.language,
+                    "notify_sync_port",
+                ));
             }
             log::info!("[settings] saved");
         } else {

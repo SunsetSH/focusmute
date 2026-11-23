@@ -76,6 +76,7 @@ pub(super) fn cmd_config(json: bool, custom_path: Option<&Path>, edit: bool) -> 
             "unmute_sound_volume:",
             "autostart:",
             "notifications_enabled:",
+            "scarlett_microphone:",
             "mute_inputs:",
             "mute_sound_path:",
             "unmute_sound_path:",
@@ -120,6 +121,7 @@ pub(super) fn cmd_config(json: bool, custom_path: Option<&Path>, edit: bool) -> 
         config.system.notifications_enabled,
         w,
     );
+    kv_indent("scarlett_microphone:", config.system.scarlett_microphone, w);
     let mute_mode = config.parse_mute_inputs();
     kv_indent("mute_inputs:", &mute_mode, w);
     let sound_label = |path: &str| {

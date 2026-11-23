@@ -44,7 +44,9 @@ FocusMute переключает mute системного микрофона г
 
 **Прошивка.** Профили проверены на прошивке 2.x. На 3.x (начиная с 3.0.2452.0) поля дескриптора сдвинуты, поэтому FocusMute берёт смещения из схемы самой карты. Номера каналов работают на обеих версиях. Кнопка Direct и LED Lab на Solo с прошивкой 3.x выключены, пока схема 3.x не проверена на устройстве. Версия и раскладка видны в `focusmute-cli status` и в «О программе».
 
-**Что именно выключает mute.** FocusMute ставит mute на микрофон Windows по умолчанию (`IAudioEndpointVolume`). Это действует на приложения, которые пишут звук через Windows: браузеры, мессенджеры, OBS через WASAPI. Программы с ASIO и аппаратный Direct Monitor карты этот флаг не видят: в наушниках и в ASIO-записи голос остаётся. Имя микрофона, к которому относится mute, показано в подсказке значка в трее.
+**Что именно выключает mute.** FocusMute ставит mute на микрофон Windows по умолчанию (`IAudioEndpointVolume`). Это действует на приложения, которые пишут звук через Windows: браузеры, мессенджеры, OBS через WASAPI. Программы с ASIO и аппаратный Direct Monitor карты этот флаг не видят: в наушниках и в ASIO-записи голос остаётся. Микрофон, к которому относится mute, показан в меню и в подсказке значка в трее.
+
+Если по умолчанию в Windows выбран другой микрофон (веб-камера, гарнитура), включите **Настройки → Система → «Всегда глушить микрофон Scarlett»** (`scarlett_microphone = true`). Тогда mute идёт на вход Focusrite, а не на микрофон по умолчанию. Когда Scarlett отключена, глушится микрофон по умолчанию; при подключении FocusMute сам возвращается к Scarlett.
 
 Подробности о Windows, USB и ограничениях Solo: [обзор совместимости](docs/17-windows-solo-compatibility-review.ru.md). План и решения по доработке: [технический план](docs/18-solo-mute-technical-plan.ru.md).
 
@@ -81,6 +83,7 @@ position = "bottom_center" # bottom_center | bottom_left | bottom_right | top_le
 
 [system]
 language = "ru"           # en | ru
+scarlett_microphone = false # true — mute всегда на входе Scarlett, только Windows
 
 [hardware_button]
 direct_button_enabled = false

@@ -104,7 +104,12 @@ pub fn run() -> focusmute_lib::error::Result<()> {
 
     if !instance.is_single() {
         log::warn!("[focusmute] another instance is already running");
-        crate::notification::Notifier::show_oneshot("Another instance is already running.");
+        // The running instance owns the tray; only the language is needed.
+        let language = focusmute_lib::config::Config::load().system.language;
+        crate::notification::Notifier::show_oneshot(crate::i18n::tr(
+            &language,
+            "notify_another_instance",
+        ));
         return Ok(());
     }
 

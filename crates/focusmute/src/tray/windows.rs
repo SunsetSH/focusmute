@@ -165,8 +165,8 @@ impl PlatformAdapter for WindowsAdapter {
         Ok(())
     }
 
-    fn create_monitor() -> Option<WasapiMonitor> {
-        match WasapiMonitor::new() {
+    fn create_monitor(prefer_scarlett: bool) -> Option<WasapiMonitor> {
+        match WasapiMonitor::new(prefer_scarlett) {
             Ok(m) => {
                 log::info!("[audio] WASAPI mute monitor ready");
                 Some(m)

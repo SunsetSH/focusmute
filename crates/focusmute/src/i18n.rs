@@ -1,6 +1,14 @@
 //! Small built-in translation catalogue. Configuration values stay language
 //! neutral; only text shown to the user is translated.
 
+/// [`tr`] with `{name}` placeholders filled in.
+pub fn trf(language: &str, key: &str, args: &[(&str, &str)]) -> String {
+    args.iter()
+        .fold(tr(language, key).to_string(), |text, (name, value)| {
+            text.replace(&format!("{{{name}}}"), value)
+        })
+}
+
 pub fn tr(language: &str, key: &str) -> &'static str {
     if !language.eq_ignore_ascii_case("ru") {
         return english(key);
@@ -115,6 +123,38 @@ pub fn tr(language: &str, key: &str) -> &'static str {
         "meter_unavailable" => "Нет данных от устройства",
         "blink_tip" => {
             "Когда Windows mute включён и сигнал выбранного входа превышает порог, индикатор mute мигает. Это предупреждает, что вы говорите при выключенном микрофоне."
+        }
+        "no_mic" => "Микрофон не найден",
+        "mic_label" => "Микрофон",
+        "mic_unnamed" => "без имени",
+        "mic_missing_hint" => "В Windows нет устройства записи",
+        "mic_switching" => "ожидание нового микрофона",
+        "scarlett_disconnected" => "Scarlett отключена",
+        "notify_muted" => "Микрофон выключен",
+        "notify_live" => "Микрофон включён",
+        "notify_no_mic" => {
+            "Микрофон не найден. FocusMute подключится к нему, как только он появится в Windows."
+        }
+        "notify_mic_not_ready" => {
+            "Windows сменила микрофон по умолчанию, но он ещё не готов. FocusMute продолжает попытки."
+        }
+        "notify_first_run" => {
+            "FocusMute запущен. Горячая клавиша: {hotkey}. Настройки — правой кнопкой по значку в трее."
+        }
+        "notify_hotkey_failed" => {
+            "Не удалось назначить горячую клавишу «{new}». Возможно, она занята другой программой. Остаётся «{old}»."
+        }
+        "notify_ptt_failed" => {
+            "Не удалось назначить клавишу «Нажми и говори» «{new}». Возможно, она занята другой программой."
+        }
+        "notify_sync_port" => {
+            "Порт синхронизации с браузером изменён. Перезапустите FocusMute, чтобы он вступил в силу."
+        }
+        "notify_config_warnings" => "Предупреждения конфигурации:",
+        "notify_another_instance" => "FocusMute уже запущен.",
+        "scarlett_mic" => "Всегда глушить микрофон Scarlett",
+        "scarlett_mic_tip" => {
+            "Mute применяется ко входу Scarlett, даже если в Windows по умолчанию выбран другой микрофон. Без Scarlett глушится микрофон Windows по умолчанию."
         }
         _ => english(key),
     }
@@ -232,6 +272,86 @@ fn english(key: &str) -> &'static str {
         "blink_tip" => {
             "When Windows mute is on and a selected input exceeds the threshold, the mute indicator blinks to warn that you are talking while muted."
         }
+        "no_mic" => "No microphone",
+        "mic_label" => "Microphone",
+        "mic_unnamed" => "unnamed",
+        "mic_missing_hint" => "Windows reports no recording device",
+        "mic_switching" => "waiting for the new microphone",
+        "scarlett_disconnected" => "Scarlett disconnected",
+        "notify_muted" => "Microphone Muted",
+        "notify_live" => "Microphone Live",
+        "notify_no_mic" => {
+            "No microphone found. FocusMute will pick it up when Windows reports one."
+        }
+        "notify_mic_not_ready" => {
+            "Windows switched the default microphone, but it is not ready yet. FocusMute keeps trying."
+        }
+        "notify_first_run" => {
+            "FocusMute running. Hotkey: {hotkey}. Right-click tray icon for settings."
+        }
+        "notify_hotkey_failed" => {
+            "Could not register hotkey \"{new}\". It may be in use by another application. Keeping \"{old}\"."
+        }
+        "notify_ptt_failed" => {
+            "Could not register push-to-talk hotkey \"{new}\". It may be in use by another application."
+        }
+        "notify_sync_port" => {
+            "Browser sync port changed. Restart FocusMute for the change to take effect."
+        }
+        "notify_config_warnings" => "Config warnings:",
+        "notify_another_instance" => "Another instance is already running.",
+        "scarlett_mic" => "Always mute the Scarlett microphone",
+        "scarlett_mic_tip" => {
+            "Mute goes to the Scarlett input even when Windows uses another microphone by default. Without the Scarlett, the Windows default microphone is muted."
+        }
         _ => "",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{tr, trf};
+
+    /// Every tray and notification text exists in both languages.
+    #[test]
+    fn tray_texts_are_translated() {
+        for key in [
+            "no_mic",
+            "mic_label",
+            "mic_unnamed",
+            "mic_missing_hint",
+            "mic_switching",
+            "scarlett_disconnected",
+            "notify_muted",
+            "notify_live",
+            "notify_no_mic",
+            "notify_mic_not_ready",
+            "notify_first_run",
+            "notify_hotkey_failed",
+            "notify_ptt_failed",
+            "notify_sync_port",
+            "notify_config_warnings",
+            "notify_another_instance",
+            "scarlett_mic",
+            "scarlett_mic_tip",
+        ] {
+            let (en, ru) = (tr("en", key), tr("ru", key));
+            assert!(!en.is_empty(), "{key} has no English text");
+            assert_ne!(en, ru, "{key} is not translated");
+        }
+    }
+
+    #[test]
+    fn placeholders_are_filled() {
+        assert_eq!(
+            trf("en", "notify_first_run", &[("hotkey", "Ctrl+M")]),
+            "FocusMute running. Hotkey: Ctrl+M. Right-click tray icon for settings."
+        );
+        let text = trf(
+            "ru",
+            "notify_hotkey_failed",
+            &[("new", "F1"), ("old", "F2")],
+        );
+        assert!(text.contains("«F1»") && text.contains("«F2»"), "{text}");
     }
 }

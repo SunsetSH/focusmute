@@ -20,7 +20,12 @@ pub(super) fn cmd_set_mute(action: MuteAction) -> Result<()> {
     {
         use super::MuteMonitor;
         audio::com_init()?;
-        audio::WasapiMonitor::new()?.set_muted(target)?;
+        audio::WasapiMonitor::new(
+            focusmute_lib::config::Config::load()
+                .system
+                .scarlett_microphone,
+        )?
+        .set_muted(target)?;
     }
 
     #[cfg(target_os = "linux")]

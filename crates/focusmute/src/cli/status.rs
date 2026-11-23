@@ -12,7 +12,10 @@ fn get_mic_status() -> Option<MicrophoneStatusJson> {
     #[cfg(windows)]
     {
         audio::com_init().ok()?;
-        let monitor = audio::WasapiMonitor::new().ok()?;
+        let prefer_scarlett = focusmute_lib::config::Config::load()
+            .system
+            .scarlett_microphone;
+        let monitor = audio::WasapiMonitor::new(prefer_scarlett).ok()?;
         let muted = monitor.is_muted();
         let name = monitor.device_name();
         Some(MicrophoneStatusJson { muted, name })

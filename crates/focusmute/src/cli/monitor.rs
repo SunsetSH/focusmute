@@ -186,7 +186,7 @@ pub(super) fn cmd_monitor(
     audio::com_init()?;
 
     #[cfg(windows)]
-    let monitor = audio::WasapiMonitor::new()?;
+    let monitor = audio::WasapiMonitor::new(config.system.scarlett_microphone)?;
 
     #[cfg(target_os = "linux")]
     let monitor = audio::PulseAudioMonitor::new()?;

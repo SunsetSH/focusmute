@@ -61,10 +61,47 @@ pub trait MuteMonitor {
     fn unmute_on_exit(&self) -> Result<()> {
         self.set_muted(false)
     }
+    /// Watch the Scarlett's input instead of the Windows default microphone
+    /// while one is active. Takes effect on the next
+    /// [`maintain`](Self::maintain). Only WASAPI can choose; others ignore it.
+    fn set_prefer_scarlett(&self, prefer: bool) {
+        let _ = prefer;
+    }
     /// Friendly name of the microphone being watched, if known.
     fn device_name(&self) -> Option<String> {
         None
     }
+}
+
+/// Which capture endpoint to watch when the Scarlett is preferred.
+#[derive(Debug, PartialEq, Eq)]
+#[cfg_attr(not(windows), allow(dead_code))]
+enum EndpointChoice {
+    /// The Windows default microphone.
+    Default,
+    /// This entry of the active capture endpoints.
+    Listed(usize),
+}
+
+/// A Focusrite input endpoint, such as "Analogue 1 + 2 (2- Focusrite USB
+/// Audio)". Loopback endpoints carry playback, not the microphone.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn is_focusrite_input(name: &str) -> bool {
+    let name = name.to_lowercase();
+    name.contains("focusrite") && !name.contains("loopback")
+}
+
+/// Pick the Scarlett's input: the default microphone when it already is one,
+/// otherwise the first active Focusrite input, otherwise the default.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn scarlett_choice(default_name: Option<&str>, active: &[Option<String>]) -> EndpointChoice {
+    if default_name.is_some_and(is_focusrite_input) {
+        return EndpointChoice::Default;
+    }
+    active
+        .iter()
+        .position(|name| name.as_deref().is_some_and(is_focusrite_input))
+        .map_or(EndpointChoice::Default, EndpointChoice::Listed)
 }
 
 /// Wait on a `(Mutex<bool>, Condvar)` signal pair with a timeout.
@@ -145,10 +182,30 @@ mod wasapi {
     /// Runs on a system thread, so it only sets a flag and wakes the poll
     /// thread; the re-bind itself happens in [`WasapiMonitor::maintain`] on the
     /// thread that owns the COM objects.
+    ///
+    /// While the Scarlett is preferred, an endpoint appearing or going away
+    /// counts as well: the Scarlett may have come back or been unplugged.
     #[implement(IMMNotificationClient)]
     struct DefaultDeviceClient {
         changed: Arc<AtomicBool>,
+        prefer_scarlett: Arc<AtomicBool>,
         signal: Arc<(Mutex<bool>, Condvar)>,
+    }
+
+    impl DefaultDeviceClient_Impl {
+        fn flag(&self) {
+            self.changed.store(true, Ordering::SeqCst);
+            if let Ok(mut changed) = self.signal.0.lock() {
+                *changed = true;
+                self.signal.1.notify_all();
+            }
+        }
+
+        fn flag_if_preferring(&self) {
+            if self.prefer_scarlett.load(Ordering::SeqCst) {
+                self.flag();
+            }
+        }
     }
 
     impl IMMNotificationClient_Impl for DefaultDeviceClient_Impl {
@@ -157,14 +214,17 @@ mod wasapi {
             _id: &windows::core::PCWSTR,
             _state: DEVICE_STATE,
         ) -> windows::core::Result<()> {
+            self.flag_if_preferring();
             Ok(())
         }
 
         fn OnDeviceAdded(&self, _id: &windows::core::PCWSTR) -> windows::core::Result<()> {
+            self.flag_if_preferring();
             Ok(())
         }
 
         fn OnDeviceRemoved(&self, _id: &windows::core::PCWSTR) -> windows::core::Result<()> {
+            self.flag_if_preferring();
             Ok(())
         }
 
@@ -175,11 +235,7 @@ mod wasapi {
             _id: &windows::core::PCWSTR,
         ) -> windows::core::Result<()> {
             if flow == eCapture && role == eConsole {
-                self.changed.store(true, Ordering::SeqCst);
-                if let Ok(mut changed) = self.signal.0.lock() {
-                    *changed = true;
-                    self.signal.1.notify_all();
-                }
+                self.flag();
             }
             Ok(())
         }
@@ -193,8 +249,10 @@ mod wasapi {
         }
     }
 
-    /// The default microphone's volume control and its mute callback.
+    /// The watched microphone's volume control and its mute callback.
     struct Endpoint {
+        /// Endpoint ID, to tell a real switch from a repeated notification.
+        id: Option<String>,
         volume: IAudioEndpointVolume,
         device_name: Option<String>,
         /// Must keep callback alive for the lifetime of the registration.
@@ -202,32 +260,16 @@ mod wasapi {
     }
 
     impl Endpoint {
-        /// Bind to the current default capture device, publish its mute state
-        /// into `muted`, and register for its change notifications.
-        unsafe fn open_default(
-            enumerator: &IMMDeviceEnumerator,
+        /// Bind to `device`, publish its mute state into `muted`, and
+        /// register for its change notifications.
+        unsafe fn open(
+            device: &IMMDevice,
             muted: &Arc<AtomicBool>,
             signal: &Arc<(Mutex<bool>, Condvar)>,
         ) -> Result<Self> {
             unsafe {
-                let device = enumerator
-                    .GetDefaultAudioEndpoint(eCapture, eConsole)
-                    .map_err(|e| AudioError::InitFailed(format!("GetDefaultAudioEndpoint: {e}")))?;
-
-                // Query device friendly name from property store
-                let device_name = match device.OpenPropertyStore(STGM_READ) {
-                    Ok(store) => match store.GetValue(&PKEY_Device_FriendlyName) {
-                        Ok(prop) => {
-                            if prop.Anonymous.Anonymous.vt == VT_LPWSTR {
-                                prop.Anonymous.Anonymous.Anonymous.pwszVal.to_string().ok()
-                            } else {
-                                None
-                            }
-                        }
-                        Err(_) => None,
-                    },
-                    Err(_) => None,
-                };
+                let id = device_id(device);
+                let device_name = friendly_name(device);
 
                 let volume: IAudioEndpointVolume = device
                     .Activate(CLSCTX_ALL, None)
@@ -248,10 +290,64 @@ mod wasapi {
                 })?;
 
                 Ok(Endpoint {
+                    id,
                     volume,
                     device_name,
                     callback,
                 })
+            }
+        }
+    }
+
+    unsafe fn friendly_name(device: &IMMDevice) -> Option<String> {
+        unsafe {
+            let store = device.OpenPropertyStore(STGM_READ).ok()?;
+            let prop = store.GetValue(&PKEY_Device_FriendlyName).ok()?;
+            if prop.Anonymous.Anonymous.vt == VT_LPWSTR {
+                prop.Anonymous.Anonymous.Anonymous.pwszVal.to_string().ok()
+            } else {
+                None
+            }
+        }
+    }
+
+    unsafe fn device_id(device: &IMMDevice) -> Option<String> {
+        unsafe {
+            let id = device.GetId().ok()?;
+            let text = id.to_string().ok();
+            CoTaskMemFree(Some(id.0 as *const _));
+            text
+        }
+    }
+
+    /// The microphone to watch: the Windows default, or with
+    /// `prefer_scarlett` an active Focusrite input (see [`scarlett_choice`]).
+    unsafe fn pick_device(
+        enumerator: &IMMDeviceEnumerator,
+        prefer_scarlett: bool,
+    ) -> Result<IMMDevice> {
+        unsafe {
+            let default = enumerator
+                .GetDefaultAudioEndpoint(eCapture, eConsole)
+                .map_err(|e| AudioError::InitFailed(format!("GetDefaultAudioEndpoint: {e}")));
+            if !prefer_scarlett {
+                return default;
+            }
+            let active: Vec<IMMDevice> =
+                match enumerator.EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE) {
+                    Ok(list) => (0..list.GetCount().unwrap_or(0))
+                        .filter_map(|i| list.Item(i).ok())
+                        .collect(),
+                    Err(e) => {
+                        log::debug!("[audio] could not list microphones: {e}");
+                        Vec::new()
+                    }
+                };
+            let names: Vec<Option<String>> = active.iter().map(|d| friendly_name(d)).collect();
+            let default_name = default.as_ref().ok().and_then(|d| friendly_name(d));
+            match scarlett_choice(default_name.as_deref(), &names) {
+                EndpointChoice::Listed(i) => Ok(active[i].clone()),
+                EndpointChoice::Default => default,
             }
         }
     }
@@ -281,6 +377,9 @@ mod wasapi {
         retry_at: Mutex<Option<std::time::Instant>>,
         /// See [`MuteMonitor::generation`].
         generation: AtomicU64,
+        /// See [`MuteMonitor::set_prefer_scarlett`]. Shared with the
+        /// notification client.
+        prefer_scarlett: Arc<AtomicBool>,
     }
 
     // COM pointers are Send-safe with proper initialization per thread.
@@ -296,9 +395,10 @@ mod wasapi {
     unsafe impl Sync for WasapiMonitor {}
 
     impl WasapiMonitor {
-        /// Create a new monitor for the default capture (microphone) device.
+        /// Create a new monitor for the default capture (microphone) device,
+        /// or the Scarlett's input with `prefer_scarlett`.
         /// Caller must ensure COM is initialized on this thread.
-        pub fn new() -> Result<Self> {
+        pub fn new(prefer_scarlett: bool) -> Result<Self> {
             unsafe {
                 let enumerator: IMMDeviceEnumerator =
                     CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
@@ -306,11 +406,14 @@ mod wasapi {
 
                 let muted = Arc::new(AtomicBool::new(false));
                 let signal = Arc::new((Mutex::new(false), Condvar::new()));
-                let endpoint = Endpoint::open_default(&enumerator, &muted, &signal)?;
+                let device = pick_device(&enumerator, prefer_scarlett)?;
+                let endpoint = Endpoint::open(&device, &muted, &signal)?;
 
                 let default_changed = Arc::new(AtomicBool::new(false));
+                let prefer_scarlett = Arc::new(AtomicBool::new(prefer_scarlett));
                 let device_client: IMMNotificationClient = DefaultDeviceClient {
                     changed: Arc::clone(&default_changed),
+                    prefer_scarlett: Arc::clone(&prefer_scarlett),
                     signal: Arc::clone(&signal),
                 }
                 .into();
@@ -328,6 +431,7 @@ mod wasapi {
                     device_client,
                     retry_at: Mutex::new(None),
                     generation: AtomicU64::new(0),
+                    prefer_scarlett,
                 })
             }
         }
@@ -372,6 +476,12 @@ mod wasapi {
             self.generation.load(Ordering::SeqCst)
         }
 
+        fn set_prefer_scarlett(&self, prefer: bool) {
+            if self.prefer_scarlett.swap(prefer, Ordering::SeqCst) != prefer {
+                self.default_changed.store(true, Ordering::SeqCst);
+            }
+        }
+
         fn wait_for_change(&self, timeout: Duration) -> bool {
             super::wait_on_signal(&self.signal, timeout)
         }
@@ -398,11 +508,26 @@ mod wasapi {
             let Ok(mut endpoint) = self.endpoint.lock() else {
                 return false;
             };
-            match unsafe { Endpoint::open_default(&self.enumerator, &self.muted, &self.signal) } {
-                Ok(new_endpoint) => {
+            let prefer_scarlett = self.prefer_scarlett.load(Ordering::SeqCst);
+            let opened = unsafe {
+                pick_device(&self.enumerator, prefer_scarlett).and_then(|device| {
+                    let id = device_id(&device);
+                    if id.is_some() && id == endpoint.id {
+                        // A notification that leaves the choice as it was.
+                        return Ok(None);
+                    }
+                    Endpoint::open(&device, &self.muted, &self.signal).map(Some)
+                })
+            };
+            match opened {
+                Ok(None) => {
+                    *retry_at = None;
+                    false
+                }
+                Ok(Some(new_endpoint)) => {
                     *retry_at = None;
                     log::info!(
-                        "[audio] default microphone changed: {}",
+                        "[audio] now watching microphone: {}",
                         new_endpoint.device_name.as_deref().unwrap_or("(unknown)")
                     );
                     // Dropping the old endpoint unregisters its callback.
@@ -832,6 +957,45 @@ mod tests {
         assert_eq!(d.update(false), None);
         assert_eq!(d.update(false), Some(false));
         assert!(!d.is_muted());
+    }
+
+    // ── scarlett_choice ──
+
+    fn names(list: &[&str]) -> Vec<Option<String>> {
+        list.iter().map(|n| Some(n.to_string())).collect()
+    }
+
+    #[test]
+    fn scarlett_default_is_kept() {
+        let active = names(&["Webcam", "Analogue 1 + 2 (2- Focusrite USB Audio)"]);
+        assert_eq!(
+            scarlett_choice(Some("Analogue 1 + 2 (2- Focusrite USB Audio)"), &active),
+            EndpointChoice::Default
+        );
+    }
+
+    #[test]
+    fn scarlett_input_wins_over_another_default() {
+        let active = names(&[
+            "Webcam",
+            "Loopback 1 + 2 (Focusrite USB Audio)",
+            "Analogue 1 + 2 (2- Focusrite USB Audio)",
+        ]);
+        assert_eq!(
+            scarlett_choice(Some("Webcam"), &active),
+            EndpointChoice::Listed(2),
+            "loopback carries playback, not the microphone"
+        );
+    }
+
+    #[test]
+    fn without_a_scarlett_the_default_is_watched() {
+        let active = vec![Some("Webcam".to_string()), None];
+        assert_eq!(
+            scarlett_choice(Some("Webcam"), &active),
+            EndpointChoice::Default
+        );
+        assert_eq!(scarlett_choice(None, &[]), EndpointChoice::Default);
     }
 
     #[test]
