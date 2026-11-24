@@ -7,14 +7,12 @@ use super::{
     Result, ScarlettDevice, StatusOutput, audio, kv, kv_indent, kv_width, led, open_device, schema,
 };
 
-/// Query current microphone status. Returns None on unsupported platforms or errors.
-fn get_mic_status() -> Option<MicrophoneStatusJson> {
+/// Query current microphone status, choosing the microphone as the tray does
+/// with `prefer_scarlett`. Returns None on unsupported platforms or errors.
+fn get_mic_status(prefer_scarlett: bool) -> Option<MicrophoneStatusJson> {
     #[cfg(windows)]
     {
         audio::com_init().ok()?;
-        let prefer_scarlett = focusmute_lib::config::Config::load()
-            .system
-            .scarlett_microphone;
         let monitor = audio::WasapiMonitor::new(prefer_scarlett).ok()?;
         let muted = monitor.is_muted();
         let name = monitor.device_name();
@@ -22,6 +20,7 @@ fn get_mic_status() -> Option<MicrophoneStatusJson> {
     }
     #[cfg(target_os = "linux")]
     {
+        let _ = prefer_scarlett;
         let monitor = audio::PulseAudioMonitor::new().ok()?;
         audio::stabilize_pulseaudio(&monitor);
         let muted = monitor.is_muted();
@@ -30,6 +29,7 @@ fn get_mic_status() -> Option<MicrophoneStatusJson> {
     }
     #[cfg(not(any(windows, target_os = "linux")))]
     {
+        let _ = prefer_scarlett;
         None
     }
 }
@@ -186,9 +186,9 @@ fn print_status(
 }
 
 pub(super) fn cmd_status(json: bool, config_path: Option<&Path>) -> Result<()> {
-    let device_status = open_device().ok().map(|dev| collect_device_status(&dev));
-    let mic_status = get_mic_status();
     let config = super::load_config(config_path);
+    let device_status = open_device().ok().map(|dev| collect_device_status(&dev));
+    let mic_status = get_mic_status(config.system.scarlett_microphone);
     print_status(device_status, mic_status, &config, json)
 }
 

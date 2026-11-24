@@ -97,6 +97,8 @@ pub enum Msg {
     BrowserMute(bool),
     /// Raw device notification packet from the Direct-button listener.
     DirectNotify(Vec<u8>),
+    /// Input meter levels from the muted-talk meter thread.
+    Meters(Vec<u32>),
 }
 
 // ── Autostart ──
@@ -370,19 +372,39 @@ impl TrayState {
         }
     }
 
-    /// Process a mute poll from the background thread. Returns the resulting action.
-    /// If a device error occurs, returns `(action, true)` to signal device loss.
+    /// Feed a mute sample from the background thread to the debouncer and
+    /// return the confirmed transition, if any. The LEDs are written
+    /// separately by [`write_indicator`](Self::write_indicator), after the
+    /// sound and the tray have reacted.
+    pub fn confirm_mute_poll(&mut self, muted: bool) -> MonitorAction {
+        self.indicator.update(muted)
+    }
+
+    /// Show `action` on the Scarlett. An error means the device is gone.
+    pub fn write_indicator(
+        &self,
+        action: MonitorAction,
+        device: &impl ScarlettDevice,
+    ) -> focusmute_lib::device::Result<()> {
+        match action {
+            MonitorAction::ApplyMute => self.indicator.apply_mute(device),
+            MonitorAction::ClearMute => self.indicator.clear_mute(device),
+            MonitorAction::NoChange => Ok(()),
+        }
+    }
+
+    /// [`confirm_mute_poll`](Self::confirm_mute_poll) and
+    /// [`write_indicator`](Self::write_indicator) in one call. Returns the
+    /// action and whether the device was lost.
+    #[cfg(test)]
     pub fn process_mute_poll(
         &mut self,
         muted: bool,
         device: Option<&impl ScarlettDevice>,
     ) -> (MonitorAction, bool) {
-        if let Some(dev) = device {
-            let (action, err) = self.indicator.poll_and_apply(muted, dev);
-            (action, err.is_some())
-        } else {
-            (self.indicator.update(muted), false)
-        }
+        let action = self.confirm_mute_poll(muted);
+        let lost = device.is_some_and(|dev| self.write_indicator(action, dev).is_err());
+        (action, lost)
     }
 
     /// Apply new configuration from settings dialog. Returns list of warnings.
@@ -497,129 +519,130 @@ impl TrayState {
     }
 }
 
-/// Handle a menu event from the tray context menu.
-///
-/// Returns `(should_quit, force_reconnect)`.
-pub fn handle_menu_event(
-    event: &MenuEvent,
+/// What a tray menu click asks the main loop to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuOutcome {
+    None,
+    ToggleMute,
+    OpenSettings,
+    Reconnect,
+    Quit,
+}
+
+/// Classify a menu event from the tray context menu.
+pub fn menu_outcome(event: &MenuEvent, menu: &TrayMenu) -> MenuOutcome {
+    let id = event.id();
+    if id == menu.quit_item.id() {
+        MenuOutcome::Quit
+    } else if id == menu.toggle_item.id() {
+        MenuOutcome::ToggleMute
+    } else if id == menu.settings_item.id() {
+        MenuOutcome::OpenSettings
+    } else if id == menu.reconnect_item.id() {
+        MenuOutcome::Reconnect
+    } else {
+        MenuOutcome::None
+    }
+}
+
+/// Apply what the settings dialog returned: the configuration, sounds,
+/// hotkeys and log level. `None` means the dialog was cancelled.
+pub fn apply_settings_result(
+    new_config: Option<Config>,
     menu: &mut TrayMenu,
     state: &mut TrayState,
-    device: &mut Option<impl ScarlettDevice>,
+    device: Option<&impl ScarlettDevice>,
     resources: &mut TrayResources,
-    toggle_mute_fn: &dyn Fn(bool),
-    settings_toggle_callback: Option<crate::settings_dialog::SettingsToggleCallback>,
-) -> (bool, bool) {
-    if event.id() == menu.quit_item.id() {
-        return (true, false);
-    } else if event.id() == menu.toggle_item.id() {
-        toggle_mute_fn(state.indicator.is_muted());
-    } else if event.id() == menu.settings_item.id() {
-        log::info!("[settings] dialog opened");
-        let info = device.as_ref().map(|d| d.info());
-        let input_count = state
-            .ctx
-            .as_ref()
-            .and_then(|c| c.input_count())
-            .unwrap_or(0);
-        if let Some(new_config) = crate::settings_dialog::show_settings(
-            &state.config,
-            input_count,
-            info,
-            settings_toggle_callback,
-        ) {
-            let previous_hotkey = state.config.keyboard.hotkey.clone();
-            let previous_ptt = state.config.keyboard.push_to_talk_hotkey.clone();
-            let changes = state.handle_settings_result(new_config, device.as_ref());
-            menu.sync_language(&state.config);
-            for w in &changes.warnings {
-                log::warn!("[config] {w}");
-            }
-
-            if changes.mute_sound_changed {
-                resources.mute_sound = sound::load_sound_data(
-                    &state.config.sound.mute_sound_path,
-                    &state.config.sound.sound_preset,
-                    sound::SoundEvent::Mute,
-                )
-                .0;
-            }
-            if changes.unmute_sound_changed {
-                resources.unmute_sound = sound::load_sound_data(
-                    &state.config.sound.unmute_sound_path,
-                    &state.config.sound.sound_preset,
-                    sound::SoundEvent::Unmute,
-                )
-                .0;
-            }
-
-            // The config keeps only shortcuts that are actually registered:
-            // saving one that failed would fail again on every start. The
-            // menu label already shows the new toggle via sync_language.
-            let mut reverted = false;
-            if changes.toggle_changed
-                && !reregister_toggle(&mut resources.hotkey, &changes.new_toggle_str)
-            {
-                crate::notification::Notifier::show_oneshot(&crate::i18n::trf(
-                    &state.config.system.language,
-                    "notify_hotkey_failed",
-                    &[("new", &changes.new_toggle_str), ("old", &previous_hotkey)],
-                ));
-                state.config.keyboard.hotkey = previous_hotkey;
-                reverted = true;
-            }
-            if changes.ptt_changed && !reregister_ptt(&mut resources.hotkey, &changes.new_ptt_str) {
-                crate::notification::Notifier::show_oneshot(&crate::i18n::trf(
-                    &state.config.system.language,
-                    "notify_ptt_failed",
-                    &[("new", &changes.new_ptt_str)],
-                ));
-                // The failed attempt dropped the old PTT registration.
-                if !reregister_ptt(&mut resources.hotkey, &previous_ptt) {
-                    log::warn!("[hotkey] could not restore push-to-talk \"{previous_ptt}\"");
-                }
-                state.config.keyboard.push_to_talk_hotkey = previous_ptt;
-                reverted = true;
-            }
-            if reverted {
-                if let Err(e) = state.config.save() {
-                    log::warn!("[config] could not save the restored hotkeys: {e}");
-                }
-                menu.sync_language(&state.config);
-            }
-            if changes.log_level_changed {
-                log::info!("[settings] log level changing to {}", changes.new_log_level);
-                crate::set_log_level(&changes.new_log_level);
-            }
-            if changes.browser_sync_port_changed {
-                log::info!("[settings] browser sync port changed — restart required");
-                crate::notification::Notifier::show_oneshot(crate::i18n::tr(
-                    &state.config.system.language,
-                    "notify_sync_port",
-                ));
-            }
-            log::info!("[settings] saved");
-        } else {
-            log::info!("[settings] cancelled");
+) {
+    if let Some(new_config) = new_config {
+        let previous_hotkey = state.config.keyboard.hotkey.clone();
+        let previous_ptt = state.config.keyboard.push_to_talk_hotkey.clone();
+        let changes = state.handle_settings_result(new_config, device);
+        menu.sync_language(&state.config);
+        for w in &changes.warnings {
+            log::warn!("[config] {w}");
         }
-        // The modal lab may have restored white on close, including Cancel.
-        // Reconcile the panel with the current mute indication before resuming.
-        if let Some(dev) = device.as_ref()
-            && focusmute_lib::models::panel(dev.info()).is_some()
+
+        if changes.mute_sound_changed {
+            resources.mute_sound = sound::load_sound_data(
+                &state.config.sound.mute_sound_path,
+                &state.config.sound.sound_preset,
+                sound::SoundEvent::Mute,
+            )
+            .0;
+        }
+        if changes.unmute_sound_changed {
+            resources.unmute_sound = sound::load_sound_data(
+                &state.config.sound.unmute_sound_path,
+                &state.config.sound.sound_preset,
+                sound::SoundEvent::Unmute,
+            )
+            .0;
+        }
+
+        // The config keeps only shortcuts that are actually registered:
+        // saving one that failed would fail again on every start. The
+        // menu label already shows the new toggle via sync_language.
+        let mut reverted = false;
+        if changes.toggle_changed
+            && !reregister_toggle(&mut resources.hotkey, &changes.new_toggle_str)
         {
-            let result = if state.indicator.is_muted() {
-                state.indicator.apply_mute(dev)
-            } else {
-                state.indicator.clear_mute(dev)
-            };
-            if let Err(error) = result {
-                log::warn!("[led] could not restore indication after settings: {error}");
-            }
+            crate::notification::Notifier::show_oneshot(&crate::i18n::trf(
+                &state.config.system.language,
+                "notify_hotkey_failed",
+                &[("new", &changes.new_toggle_str), ("old", &previous_hotkey)],
+            ));
+            state.config.keyboard.hotkey = previous_hotkey;
+            reverted = true;
         }
-    } else if event.id() == menu.reconnect_item.id() {
-        state.reset_backoff();
-        return (false, true);
+        if changes.ptt_changed && !reregister_ptt(&mut resources.hotkey, &changes.new_ptt_str) {
+            crate::notification::Notifier::show_oneshot(&crate::i18n::trf(
+                &state.config.system.language,
+                "notify_ptt_failed",
+                &[("new", &changes.new_ptt_str)],
+            ));
+            // The failed attempt dropped the old PTT registration.
+            if !reregister_ptt(&mut resources.hotkey, &previous_ptt) {
+                log::warn!("[hotkey] could not restore push-to-talk \"{previous_ptt}\"");
+            }
+            state.config.keyboard.push_to_talk_hotkey = previous_ptt;
+            reverted = true;
+        }
+        if reverted {
+            if let Err(e) = state.config.save() {
+                log::warn!("[config] could not save the restored hotkeys: {e}");
+            }
+            menu.sync_language(&state.config);
+        }
+        if changes.log_level_changed {
+            log::info!("[settings] log level changing to {}", changes.new_log_level);
+            crate::set_log_level(&changes.new_log_level);
+        }
+        if changes.browser_sync_port_changed {
+            log::info!("[settings] browser sync port changed — restart required");
+            crate::notification::Notifier::show_oneshot(crate::i18n::tr(
+                &state.config.system.language,
+                "notify_sync_port",
+            ));
+        }
+        log::info!("[settings] saved");
+    } else {
+        log::info!("[settings] cancelled");
     }
-    (false, false)
+    // The modal lab may have restored white on close, including Cancel.
+    // Reconcile the panel with the current mute indication before resuming.
+    if let Some(dev) = device
+        && focusmute_lib::models::panel(dev.info()).is_some()
+    {
+        let result = if state.indicator.is_muted() {
+            state.indicator.apply_mute(dev)
+        } else {
+            state.indicator.clear_mute(dev)
+        };
+        if let Err(error) = result {
+            log::warn!("[led] could not restore indication after settings: {error}");
+        }
+    }
 }
 
 #[cfg(test)]

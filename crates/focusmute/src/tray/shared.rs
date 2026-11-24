@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use focusmute_lib::audio::MuteMonitor;
 use focusmute_lib::config::Config;
-use focusmute_lib::device::{ScarlettDevice, open_device_by_serial};
+use focusmute_lib::device::{PlatformDevice, ScarlettDevice, open_device_by_serial};
 use focusmute_lib::models::PanelControls;
 use focusmute_lib::monitor::MonitorAction;
 
@@ -43,6 +43,11 @@ pub trait PlatformAdapter {
     /// Pump platform-specific events (Win32 messages, GTK iterations).
     fn pump_events();
 
+    /// Pump events the settings window's own event loop does not see, from
+    /// inside it. Windows needs nothing: winit dispatches every message of
+    /// the thread, the tray's and the hotkeys' windows included.
+    fn pump_events_nested() {}
+
     /// Block until the next platform event, a [`super::wake::wake_main`]
     /// call, or `timeout`. Linux keeps its fixed 50 ms GTK timer instead.
     fn wait_for_events(timeout: Duration);
@@ -73,7 +78,7 @@ const POLL_IDLE: Duration = Duration::from_millis(250);
 const POLL_CONFIRM: Duration = Duration::from_millis(25);
 
 /// Main-loop wait while something is timed: a blink, a Direct gesture, a
-/// muted-talk meter read, or a pending reconnect.
+/// muted-talk blink, or a pending reconnect.
 const LOOP_BUSY: Duration = Duration::from_millis(50);
 
 /// Main-loop wait when idle. Every input that matters (tray, hotkeys,
@@ -271,15 +276,24 @@ impl DirectGesture {
 /// when two presses land before the first is confirmed.
 struct MuteIntent {
     target: std::cell::Cell<Option<(bool, Instant)>>,
+    /// The last request, kept after the monitor reports it: tells a
+    /// transition FocusMute caused from one made elsewhere.
+    last: std::cell::Cell<Option<(bool, Instant)>>,
 }
 
 impl MuteIntent {
     /// Longer than any observed `SetMute` → callback delay.
     const HOLD: Duration = Duration::from_millis(500);
 
+    /// How long after a request a confirmed transition to the requested
+    /// state still counts as its result. Generous on purpose: a slow loop
+    /// must not turn FocusMute's own mute into one made elsewhere.
+    const CONFIRM: Duration = Duration::from_secs(2);
+
     fn new() -> Self {
         Self {
             target: std::cell::Cell::new(None),
+            last: std::cell::Cell::new(None),
         }
     }
 
@@ -297,9 +311,10 @@ impl MuteIntent {
         }
     }
 
-    /// Drop the pending request: it was made to another microphone.
+    /// Drop the requests: they were made to another microphone.
     fn forget(&self) {
         self.target.set(None);
+        self.last.set(None);
     }
 
     /// Ask the monitor for `muted` and remember the request.
@@ -309,8 +324,22 @@ impl MuteIntent {
         muted: bool,
     ) -> focusmute_lib::audio::Result<()> {
         monitor.set_muted(muted)?;
-        self.target.set(Some((muted, Instant::now())));
+        let now = Instant::now();
+        self.target.set(Some((muted, now)));
+        self.last.set(Some((muted, now)));
         Ok(())
+    }
+
+    /// A transition to `muted` was confirmed: if it answers FocusMute's last
+    /// request, consume that request and return how long ago it was made.
+    fn confirms(&self, muted: bool) -> Option<Duration> {
+        match self.last.get() {
+            Some((requested, at)) if requested == muted && at.elapsed() < Self::CONFIRM => {
+                self.last.set(None);
+                Some(at.elapsed())
+            }
+            _ => None,
+        }
     }
 }
 
@@ -341,14 +370,50 @@ fn adopt_mute_state(
     tray_menu.set_muted(muted);
 }
 
-/// Mute state the tray keeps about the microphone being watched.
+/// Mute state the tray keeps about the microphone being watched. Everything
+/// here belongs to one microphone and is dropped by [`Self::switched`].
 struct MicTracking {
-    /// The microphone was muted before FocusMute watched it; see the exit path.
-    preexisting_mute: bool,
+    /// FocusMute muted this microphone itself: by hotkey, menu, push-to-talk,
+    /// Direct or browser sync. Only such a mute is undone on exit; a mute made
+    /// elsewhere (Windows, another app), or present before FocusMute watched
+    /// the microphone, is left in place.
+    owned_mute: bool,
     /// The last mute command, until the monitor confirms it.
     intent: MuteIntent,
     /// The user was told the switch to a new default microphone failed.
     stale_notified: bool,
+    /// A push-to-talk press unmuted this microphone; release re-mutes it.
+    ptt_active: bool,
+    ptt_noop_logged: bool,
+    /// A browser-sync command waits for its confirming transition, whose beep
+    /// and reverse sync are then suppressed.
+    browser_sync_pending: bool,
+    /// The log says mute goes to a Scarlett input that is not the Windows
+    /// default microphone.
+    not_default_logged: bool,
+}
+
+impl MicTracking {
+    fn new() -> Self {
+        Self {
+            owned_mute: false,
+            intent: MuteIntent::new(),
+            stale_notified: false,
+            ptt_active: false,
+            ptt_noop_logged: false,
+            browser_sync_pending: false,
+            not_default_logged: false,
+        }
+    }
+
+    /// The monitor now watches another microphone. A push-to-talk release or
+    /// a browser command confirmation would otherwise act on it.
+    fn switched(&mut self) {
+        self.owned_mute = false;
+        self.intent.forget();
+        self.ptt_active = false;
+        self.browser_sync_pending = false;
+    }
 }
 
 /// Follow a change of the Windows default microphone: adopt its state
@@ -366,10 +431,8 @@ fn follow_default_mic<M: MuteMonitor + ?Sized>(
     if !monitor.maintain(retry_now) {
         return;
     }
-    let muted = monitor.is_muted();
-    mic.preexisting_mute = muted;
-    mic.intent.forget();
-    adopt_mute_state(state, device, tray_menu, muted);
+    mic.switched();
+    adopt_mute_state(state, device, tray_menu, monitor.is_muted());
 }
 
 /// Tell the user once per stale period why a command did nothing.
@@ -390,15 +453,18 @@ fn mic_status<M: MuteMonitor + ?Sized>(monitor: Option<&M>) -> state::MicStatus 
         Some(m) => state::MicStatus::Watching {
             name: m.device_name(),
             stale: m.is_stale(),
+            not_default: !m.watches_default(),
         },
     }
 }
 
 /// Classify one device notification from the Direct listener.
+#[allow(clippy::too_many_arguments)]
 fn handle_direct_notify<M: MuteMonitor>(
     device: &impl ScarlettDevice,
     panel: &PanelControls,
     monitor: Option<&M>,
+    intent: &MuteIntent,
     muted: bool,
     window_ms: u64,
     gesture: &mut DirectGesture,
@@ -425,7 +491,9 @@ fn handle_direct_notify<M: MuteMonitor>(
                     current,
                     Duration::from_millis(window_ms.clamp(200, 600)),
                 ) {
-                    apply_direct_action(device, panel, monitor, muted, gesture, action, now);
+                    apply_direct_action(
+                        device, panel, monitor, intent, muted, gesture, action, now,
+                    );
                 }
             }
             Err(e) => log::warn!("[direct] could not read Direct state: {e}"),
@@ -433,10 +501,12 @@ fn handle_direct_notify<M: MuteMonitor>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_direct_action<M: MuteMonitor>(
     device: &impl ScarlettDevice,
     panel: &PanelControls,
     monitor: Option<&M>,
+    intent: &MuteIntent,
     muted: bool,
     gesture: &mut DirectGesture,
     action: DirectAction,
@@ -457,11 +527,786 @@ fn apply_direct_action<M: MuteMonitor>(
         return;
     }
     gesture.suppress_own_notifications(now, desired_direct);
+    // Through the intent like a hotkey, so a quick hotkey press after the
+    // gesture toggles from the new state and the mute counts as FocusMute's.
     if matches!(action, DirectAction::Single { .. })
         && let Some(monitor) = monitor
-        && let Err(e) = monitor.set_muted(!muted)
+        && let Err(e) = intent.request(monitor, !muted)
     {
         log::warn!("[direct] could not toggle mute: {e}");
+    }
+}
+
+/// Whether the muted-talk meters are read on a [`MeterWatcher`] thread with a
+/// handle of its own. The Windows driver serves several handles at once (the
+/// settings window already opens one). On Linux the USB interface is claimed
+/// exclusively and one request is two transfers, so a second handle cannot
+/// open and the main one cannot be shared: the reads stay on the main loop.
+const METER_THREAD: bool = cfg!(windows);
+
+/// Background reader of the input meters for the muted-talk blink.
+///
+/// A meter read is a device round trip; done on the main loop it delayed every
+/// mute transition queued behind it. The thread opens its own handle, as the
+/// settings window does, and exists only while the microphone is muted with
+/// the feature on and a Scarlett connected.
+struct MeterWatcher {
+    stop: Arc<AtomicBool>,
+    handle: JoinHandle<()>,
+}
+
+impl MeterWatcher {
+    /// Minimum gap before a new reader after one failed.
+    const RETRY: Duration = Duration::from_secs(2);
+
+    fn spawn(serial: String, tx: mpsc::Sender<Msg>) -> Option<Self> {
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread_stop = Arc::clone(&stop);
+        let handle = std::thread::Builder::new()
+            .name("meter".into())
+            .spawn(move || {
+                let device = match open_device_by_serial(&serial) {
+                    Ok(device) => device,
+                    Err(e) => {
+                        log::debug!("[blink] meter reader could not open the device: {e}");
+                        return;
+                    }
+                };
+                while !thread_stop.load(Ordering::SeqCst) && crate::RUNNING.load(Ordering::SeqCst) {
+                    let started = Instant::now();
+                    // A failure means the device is gone or busy; the main
+                    // loop starts a new reader after RETRY.
+                    let Some(levels) = read_meters_logged(&device) else {
+                        break;
+                    };
+                    if tx.send(Msg::Meters(levels)).is_err() {
+                        break;
+                    }
+                    super::wake::wake_main();
+                    std::thread::sleep(
+                        super::blink::METER_INTERVAL.saturating_sub(started.elapsed()),
+                    );
+                }
+            })
+            .ok()?;
+        Some(Self { stop, handle })
+    }
+
+    /// Ask the thread to exit; it does so after its current read or wait.
+    fn stop(self) {
+        self.stop.store(true, Ordering::SeqCst);
+    }
+}
+
+/// One meter read; a slow or failed read is logged.
+fn read_meters_logged(device: &impl ScarlettDevice) -> Option<Vec<u32>> {
+    /// A read slower than this is worth a line in the log.
+    const SLOW: Duration = Duration::from_millis(50);
+    let started = Instant::now();
+    let result = focusmute_lib::meter::read_meters(device, focusmute_lib::meter::METER_COUNT);
+    let elapsed = started.elapsed();
+    if elapsed > SLOW {
+        log::warn!("[blink] slow meter read: {} ms", elapsed.as_millis());
+    }
+    result
+        .map_err(|e| log::warn!("[blink] meter read failed: {e}"))
+        .ok()
+}
+
+/// Start or stop the meter reader to match `wanted`. A reader that ended on
+/// its own failed, and the next one waits [`MeterWatcher::RETRY`]; one stopped
+/// here (an unmute) does not delay the next mute's reader.
+fn sync_meter_watcher(
+    watcher: &mut Option<MeterWatcher>,
+    last_failure: &mut Option<Instant>,
+    wanted: bool,
+    serial: &str,
+    tx: &mpsc::Sender<Msg>,
+) {
+    if watcher.as_ref().is_some_and(|w| w.handle.is_finished()) {
+        *watcher = None;
+        *last_failure = Some(Instant::now());
+    }
+    if !wanted {
+        if let Some(w) = watcher.take() {
+            w.stop();
+        }
+        return;
+    }
+    if watcher.is_some() || last_failure.is_some_and(|at| at.elapsed() < MeterWatcher::RETRY) {
+        return;
+    }
+    *watcher = MeterWatcher::spawn(serial.to_string(), tx.clone());
+}
+
+/// Whether the Scarlett behind `device` is gone. A removal event names no
+/// device and may belong to another Focusrite interface, so the handle is
+/// asked; a failed read is retried once, since a busy driver can fail one.
+fn device_gone(device: &impl ScarlettDevice) -> bool {
+    const RETRY_AFTER: Duration = Duration::from_millis(75);
+    if focusmute_lib::device::still_present(device) {
+        return false;
+    }
+    std::thread::sleep(RETRY_AFTER);
+    !focusmute_lib::device::still_present(device)
+}
+
+/// Everything the tray loop owns. One [`step`](Self::step) handles whatever
+/// is pending; the settings window runs it too while it is open, so the tray
+/// keeps working behind the modal dialog.
+struct TrayCore<P: PlatformAdapter> {
+    state: TrayState,
+    device: Option<PlatformDevice>,
+    monitor: Option<Arc<P::Monitor>>,
+    monitor_retry: focusmute_lib::reconnect::ReconnectState,
+    mic: MicTracking,
+    resources: TrayResources,
+    tray_menu: state::TrayMenu,
+    rx: Receiver<Msg>,
+    /// Kept for the on-demand threads (poll, Direct, meters), so poll-thread
+    /// death is detected with `JoinHandle::is_finished` rather than a
+    /// disconnect.
+    tx: mpsc::Sender<Msg>,
+    bg_handle: Option<JoinHandle<()>>,
+    poll_thread_dead: bool,
+    reverse_slot: Arc<super::browser_sync::ReverseSlot>,
+    blink: super::blink::BlinkState,
+    direct_gesture: DirectGesture,
+    direct_watcher: Option<DirectWatcher>,
+    direct_last_spawn: Option<Instant>,
+    meter_watcher: Option<MeterWatcher>,
+    meter_last_failure: Option<Instant>,
+    /// Next main-loop meter read where there is no meter thread.
+    next_inline_meter: Option<Instant>,
+    /// No window exists until the first banner is shown.
+    osd: crate::osd::Osd,
+    no_mic_notified: bool,
+    quit: bool,
+}
+
+impl<P: PlatformAdapter> TrayCore<P> {
+    /// Handle everything pending. `settings` is `Some(capturing)` while the
+    /// settings window runs this step: the window is not opened again, and
+    /// hotkey presses do nothing while it records a shortcut.
+    fn step(&mut self, settings: Option<bool>) {
+        if settings.is_some() {
+            P::pump_events_nested();
+        }
+        self.maintain_monitor();
+        self.maintain_device();
+        self.sync_watchers();
+        if !self.state.config.osd.enabled {
+            self.osd.destroy();
+        }
+        let meters = self.drain_messages();
+        self.update_blink(meters);
+        if let Some(ref dev) = self.device
+            && let Err(error) = self.state.indicator.animate(dev, Instant::now())
+        {
+            log::debug!("[led] mute blink failed: {error}");
+        }
+        self.handle_menu_events(settings.is_some());
+        self.handle_hotkeys(settings.unwrap_or(false));
+    }
+
+    /// Microphone monitor: created late when there was no capture device at
+    /// startup, re-bound when Windows picks another default.
+    fn maintain_monitor(&mut self) {
+        if self.monitor.is_none() && self.monitor_retry.should_attempt() {
+            match P::create_monitor(self.state.config.system.scarlett_microphone) {
+                Some(m) => {
+                    self.monitor_retry.record_success();
+                    let m = Arc::new(m);
+                    self.mic.switched();
+                    adopt_mute_state(
+                        &mut self.state,
+                        self.device.as_ref(),
+                        &self.tray_menu,
+                        m.is_muted(),
+                    );
+                    self.bg_handle = Some(P::spawn_poll_thread(Arc::clone(&m), self.tx.clone()));
+                    self.poll_thread_dead = false;
+                    self.no_mic_notified = false;
+                    self.monitor = Some(m);
+                }
+                None => self.monitor_retry.record_failure(),
+            }
+        }
+        if let Some(ref m) = self.monitor {
+            // Hot-applies the settings option; a change makes the next
+            // maintain pick the microphone again.
+            m.set_prefer_scarlett(self.state.config.system.scarlett_microphone);
+            follow_default_mic(
+                &**m,
+                false,
+                &mut self.state,
+                self.device.as_ref(),
+                &self.tray_menu,
+                &mut self.mic,
+            );
+            if !m.is_stale() {
+                self.mic.stale_notified = false;
+            }
+            // The tray marks it; a notification on every start would nag a
+            // user who set the option for exactly this case.
+            if m.watches_default() {
+                self.mic.not_default_logged = false;
+            } else if !self.mic.not_default_logged {
+                self.mic.not_default_logged = true;
+                log::info!(
+                    "[audio] muting \"{}\", which is not the Windows default microphone",
+                    m.device_name().unwrap_or_default()
+                );
+            }
+        }
+        self.tray_menu.set_mic(mic_status(self.monitor.as_deref()));
+    }
+
+    /// Device removal (`RegisterDeviceNotification`) and reconnection.
+    fn maintain_device(&mut self) {
+        // An event while no device is open is consumed and ignored.
+        if P::check_device_removed()
+            && let Some(ref dev) = self.device
+        {
+            if device_gone(dev) {
+                log::warn!("[device] removed (USB hotplug event)");
+                self.drop_device();
+            } else {
+                log::debug!("[device] removal event, but the device still answers");
+            }
+        }
+        // An arriving Focusrite interface makes the next attempt worth trying
+        // now rather than after the backoff.
+        if P::check_device_arrived() && self.device.is_none() {
+            log::debug!("[device] interface arrived; reconnecting now");
+            self.state.reset_backoff();
+        }
+        if self.device.is_none()
+            && let Some(new_dev) = self.state.try_reconnect()
+        {
+            log::info!("[device] reconnected: {}", new_dev.info().device_name);
+            self.device = Some(new_dev);
+            // Listeners still on the previous handle would hear the old
+            // session; let the next sync open them on the new device.
+            if let Some(watcher) = self.direct_watcher.take() {
+                watcher.stop();
+            }
+            self.direct_last_spawn = None;
+            if let Some(watcher) = self.meter_watcher.take() {
+                watcher.stop();
+            }
+            self.meter_last_failure = None;
+            self.tray_menu
+                .set_device(self.device.as_ref().map(|d| d.info().device_name.as_str()));
+        }
+    }
+
+    fn drop_device(&mut self) {
+        self.device = None;
+        self.tray_menu.set_device(None);
+    }
+
+    /// The Scarlett's Direct button and LED Lab controls, if it has them.
+    fn panel(&self) -> Option<&'static PanelControls> {
+        self.device
+            .as_ref()
+            .and_then(|d| focusmute_lib::models::panel(d.info()))
+            .map(|p| p.controls)
+    }
+
+    fn direct_wanted(&self) -> bool {
+        self.state.config.hardware_button.direct_button_enabled && self.panel().is_some()
+    }
+
+    /// The muted-talk meter reads are wanted (the microphone may be muted).
+    fn talk_watch_enabled(&self) -> bool {
+        self.state.config.indicator.blink_on_talk && !self.state.config.indicator.blink_while_muted
+    }
+
+    /// The mute state commands toggle from.
+    fn mute_baseline(&self) -> bool {
+        self.monitor
+            .as_deref()
+            .map_or(self.state.indicator.is_muted(), |m| {
+                self.mic.intent.current(m.is_muted())
+            })
+    }
+
+    /// Direct listener and meter reader threads, and a Direct single press
+    /// whose double-click window ran out.
+    fn sync_watchers(&mut self) {
+        // Direct is an opt-in gesture on models with panel controls (the
+        // Solo). Its listener thread exists only while the option is on;
+        // notifications arrive as Msg::DirectNotify.
+        let direct_wanted = self.direct_wanted();
+        sync_direct_watcher(
+            &mut self.direct_watcher,
+            &mut self.direct_last_spawn,
+            direct_wanted,
+            self.device.as_ref(),
+            &self.tx,
+        );
+        if !direct_wanted {
+            self.direct_gesture.cancel();
+        } else if let Some(ref dev) = self.device
+            && let Some(panel) = self.panel()
+        {
+            let now = Instant::now();
+            if let Some(action) = self.direct_gesture.tick(now) {
+                let muted = self.mute_baseline();
+                apply_direct_action(
+                    dev,
+                    panel,
+                    self.monitor.as_deref(),
+                    &self.mic.intent,
+                    muted,
+                    &mut self.direct_gesture,
+                    action,
+                    now,
+                );
+            }
+        }
+        let meters_wanted = METER_THREAD
+            && self.talk_watch_enabled()
+            && self.state.indicator.is_muted()
+            && self.device.is_some();
+        sync_meter_watcher(
+            &mut self.meter_watcher,
+            &mut self.meter_last_failure,
+            meters_wanted,
+            &self.state.config.system.device_serial,
+            &self.tx,
+        );
+    }
+
+    /// Drain background messages (non-blocking). Returns the latest meter
+    /// levels, if any arrived.
+    fn drain_messages(&mut self) -> Option<Vec<u32>> {
+        let mut browser_mute_target: Option<bool> = None;
+        let mut meters = None;
+        while let Ok(msg) = self.rx.try_recv() {
+            match msg {
+                Msg::MutePoll { muted, generation } => self.handle_mute_poll(muted, generation),
+                Msg::DirectNotify(packet) => {
+                    // Direct actions run in this pass; a resulting mute change
+                    // arrives as a MutePoll on a following pass.
+                    if self.direct_wanted()
+                        && let Some(ref dev) = self.device
+                        && let Some(panel) = self.panel()
+                    {
+                        let muted = self.mute_baseline();
+                        handle_direct_notify(
+                            dev,
+                            panel,
+                            self.monitor.as_deref(),
+                            &self.mic.intent,
+                            muted,
+                            self.state.config.hardware_button.direct_double_click_ms,
+                            &mut self.direct_gesture,
+                            &packet,
+                        );
+                    }
+                }
+                Msg::BrowserMute(muted) => {
+                    // Coalesce: Meet flickers its mute state during join-screen
+                    // render, producing bursts like false→true→false within one
+                    // drain pass. is_muted() is callback-cached and lags set_muted,
+                    // so acting per-message evaluates every message against the
+                    // same stale snapshot and can latch a transient state. Browser
+                    // sync is level-triggered — only the last state matters.
+                    browser_mute_target = Some(muted);
+                }
+                Msg::Meters(levels) => meters = Some(levels),
+            }
+        }
+        if !self.poll_thread_dead && self.bg_handle.as_ref().is_some_and(|h| h.is_finished()) {
+            log::error!("[audio] monitor thread stopped unexpectedly");
+            self.poll_thread_dead = true;
+        }
+        if let Some(muted) = browser_mute_target {
+            if let Some(ref m) = self.monitor
+                && m.is_stale()
+            {
+                follow_default_mic(
+                    &**m,
+                    true,
+                    &mut self.state,
+                    self.device.as_ref(),
+                    &self.tray_menu,
+                    &mut self.mic,
+                );
+            }
+            handle_browser_mute(
+                self.monitor.as_deref(),
+                muted,
+                self.state.indicator.is_muted(),
+                &mut self.mic.browser_sync_pending,
+            );
+        }
+        meters
+    }
+
+    /// One mute sample: on a confirmed transition, sound, tray, OSD, hooks
+    /// and reverse sync react first, the Scarlett's LEDs follow. A slow LED
+    /// write then delays only the LEDs.
+    fn handle_mute_poll(&mut self, muted: bool, generation: u64) {
+        // Queued before a switch: it describes the previous microphone and
+        // would pass as a mute or unmute.
+        if self
+            .monitor
+            .as_ref()
+            .is_some_and(|m| m.generation() != generation)
+        {
+            log::debug!("[mute] dropped a poll of the previous microphone");
+            return;
+        }
+        let action = self.state.confirm_mute_poll(muted);
+        if action == MonitorAction::NoChange {
+            return;
+        }
+        // A pending flag means this transition originated in the browser.
+        let browser_originated = self.mic.browser_sync_pending;
+        let suppress_sound =
+            browser_originated && self.state.config.sound.suppress_browser_sync_sound;
+        self.mic.browser_sync_pending = false;
+        let requested_ago = self.mic.intent.confirms(action == MonitorAction::ApplyMute);
+        if let Some(ago) = requested_ago {
+            log::debug!("[mute] confirmed {} ms after the request", ago.as_millis());
+        }
+        self.mic.owned_mute =
+            action == MonitorAction::ApplyMute && (requested_ago.is_some() || browser_originated);
+        // Reverse sync: mirror USER-initiated transitions to the extension.
+        // Browser-originated ones are echoes — the meeting page already shows
+        // that state.
+        if self.state.config.system.browser_sync_reverse && !browser_originated {
+            let muted = action == MonitorAction::ApplyMute;
+            log::debug!(
+                "[sync] reverse action queued: {}",
+                if muted { "mute" } else { "unmute" }
+            );
+            self.reverse_slot.set(muted);
+        }
+        state::apply_mute_ui(
+            action,
+            &self.tray_menu,
+            &self.state,
+            &mut self.resources,
+            suppress_sound,
+        );
+        // The OSD reports the microphone, so it works without the Scarlett too.
+        if self.state.config.osd.enabled {
+            let kind = if action == MonitorAction::ApplyMute {
+                crate::osd::OsdKind::Muted
+            } else {
+                crate::osd::OsdKind::Live
+            };
+            self.osd.show(
+                kind,
+                &self.state.config.system.language,
+                &self.state.config.osd.position,
+            );
+        }
+        if let Some(ref dev) = self.device {
+            let started = Instant::now();
+            let result = self.state.write_indicator(action, dev);
+            log::debug!(
+                "[led] indicator written in {} ms",
+                started.elapsed().as_millis()
+            );
+            if let Err(e) = result {
+                log::warn!("[device] disconnected (communication error: {e})");
+                self.drop_device();
+            }
+        }
+    }
+
+    /// Muted-talk blink: blinks the indicator while the meters show a level
+    /// over the threshold.
+    fn update_blink(&mut self, meters: Option<Vec<u32>>) {
+        if self.talk_watch_enabled()
+            && self.state.indicator.is_muted()
+            && let Some(ref dev) = self.device
+        {
+            let now = Instant::now();
+            let meters = if METER_THREAD {
+                meters
+            } else if self.next_inline_meter.is_none_or(|at| now >= at) {
+                self.next_inline_meter = Some(now + super::blink::METER_INTERVAL);
+                read_meters_logged(dev)
+            } else {
+                None
+            };
+            let talking = meters.map(|levels| {
+                let level = focusmute_lib::meter::max_input_level(
+                    &levels,
+                    &self.state.indicator.strategy().input_indices,
+                );
+                level >= self.state.config.indicator.talk_threshold
+            });
+            if talking == Some(true) && self.state.config.osd.enabled {
+                self.osd.show(
+                    crate::osd::OsdKind::Talking,
+                    &self.state.config.system.language,
+                    &self.state.config.osd.position,
+                );
+            }
+            if let Some(action) = self.blink.advance(now, talking) {
+                apply_blink_action(dev, &self.state, action);
+            }
+        } else {
+            self.next_inline_meter = None;
+            if let Some(action) = self.blink.reset(self.state.indicator.is_muted())
+                && let Some(ref dev) = self.device
+            {
+                apply_blink_action(dev, &self.state, action);
+            }
+        }
+    }
+
+    /// A command is about to go out: if Windows moved the default microphone
+    /// and the switch failed, try it now rather than in 2 s.
+    fn retry_stale_mic(&mut self) {
+        if let Some(ref m) = self.monitor
+            && m.is_stale()
+        {
+            follow_default_mic(
+                &**m,
+                true,
+                &mut self.state,
+                self.device.as_ref(),
+                &self.tray_menu,
+                &mut self.mic,
+            );
+        }
+    }
+
+    fn handle_menu_events(&mut self, in_settings: bool) {
+        while let Ok(event) = MenuEvent::receiver().try_recv() {
+            match state::menu_outcome(&event, &self.tray_menu) {
+                state::MenuOutcome::ToggleMute => {
+                    self.retry_stale_mic();
+                    if let Some(m) = self.monitor.clone() {
+                        let target = !self.mic.intent.current(m.is_muted());
+                        if let Err(e) = self.mic.intent.request(&*m, target) {
+                            log::warn!("[mute] failed to toggle mute: {e}");
+                        }
+                        report_stale_mic(&*m, &mut self.mic, &self.state.config.system.language);
+                    }
+                }
+                state::MenuOutcome::OpenSettings if in_settings => {
+                    log::debug!("[settings] already open");
+                }
+                state::MenuOutcome::OpenSettings => self.open_settings(),
+                state::MenuOutcome::Reconnect => {
+                    self.state.reset_backoff();
+                    self.drop_device();
+                }
+                state::MenuOutcome::Quit => {
+                    self.quit = true;
+                    return;
+                }
+                state::MenuOutcome::None => {}
+            }
+        }
+    }
+
+    /// Show the modal settings window. The tray keeps stepping inside it; the
+    /// result is applied once it closes.
+    fn open_settings(&mut self) {
+        log::info!("[settings] dialog opened");
+        let config = self.state.config.clone();
+        let info = self.device.as_ref().map(|d| d.info().clone());
+        let input_count = self
+            .state
+            .ctx
+            .as_ref()
+            .and_then(|c| c.input_count())
+            .unwrap_or(0);
+        let mut tick = |capturing: bool| {
+            self.step(Some(capturing));
+            !self.quit && RUNNING.load(Ordering::SeqCst)
+        };
+        let result = crate::settings_dialog::show_settings(
+            &config,
+            input_count,
+            info.as_ref(),
+            Some(&mut tick),
+        );
+        state::apply_settings_result(
+            result,
+            &mut self.tray_menu,
+            &mut self.state,
+            self.device.as_ref(),
+            &mut self.resources,
+        );
+    }
+
+    /// `capturing`: the settings window is recording a shortcut, so presses
+    /// are the user typing it, not commands.
+    fn handle_hotkeys(&mut self, capturing: bool) {
+        while let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
+            if capturing && event.state == HotKeyState::Pressed {
+                continue;
+            }
+            let Some(m) = self.monitor.clone() else {
+                if !self.no_mic_notified && event.state == HotKeyState::Pressed {
+                    self.no_mic_notified = true;
+                    log::warn!("[hotkey] no microphone to mute yet");
+                    crate::notification::Notifier::show_oneshot(crate::i18n::tr(
+                        &self.state.config.system.language,
+                        "notify_no_mic",
+                    ));
+                }
+                continue;
+            };
+            // A PTT release counts too: it re-mutes.
+            self.retry_stale_mic();
+            let language = self.state.config.system.language.clone();
+            let mic = &mut self.mic;
+            if event.id == self.resources.hotkey.toggle_id {
+                // Toggle hotkey: act on press only
+                if event.state != HotKeyState::Pressed {
+                    continue;
+                }
+                mic.ptt_active = false;
+                mic.ptt_noop_logged = false;
+                let target_muted = !mic.intent.current(m.is_muted());
+                log::info!(
+                    "[hotkey] toggle → {}",
+                    if target_muted { "muting" } else { "unmuting" }
+                );
+                if let Err(e) = mic.intent.request(&*m, target_muted) {
+                    log::warn!("[hotkey] failed to set mute state: {e}");
+                    report_stale_mic(&*m, mic, &language);
+                }
+            } else if self
+                .resources
+                .hotkey
+                .ptt_id
+                .is_some_and(|id| event.id == id)
+            {
+                // PTT hotkey: press = unmute (if muted), release = re-mute (if PTT activated)
+                match event.state {
+                    HotKeyState::Pressed => {
+                        if mic.intent.current(m.is_muted()) {
+                            mic.ptt_noop_logged = false;
+                            log::info!("[ptt] held → unmuting");
+                            // Only an unmute that went out is undone on
+                            // release; otherwise release would mute a
+                            // microphone PTT never touched.
+                            match mic.intent.request(&*m, false) {
+                                Ok(()) => mic.ptt_active = true,
+                                Err(e) => {
+                                    log::warn!("[ptt] failed to unmute: {e}");
+                                    report_stale_mic(&*m, mic, &language);
+                                }
+                            }
+                        } else if !mic.ptt_noop_logged {
+                            mic.ptt_noop_logged = true;
+                            log::debug!("[ptt] already unmuted, ignoring press");
+                        }
+                    }
+                    HotKeyState::Released => {
+                        if mic.ptt_active {
+                            mic.ptt_active = false;
+                            log::info!("[ptt] released → re-muting");
+                            if let Err(e) = mic.intent.request(&*m, true) {
+                                log::warn!("[ptt] failed to re-mute: {e}");
+                                report_stale_mic(&*m, mic, &language);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// How long the loop may wait for the next event. Short only while
+    /// something is timed; otherwise wakes come from messages.
+    fn wait_timeout(&self) -> Duration {
+        let talk_watch = self.talk_watch_enabled() && self.state.indicator.is_muted();
+        let busy = self.direct_gesture.is_pending()
+            || self.state.indicator.is_animating()
+            || (talk_watch && self.device.is_some());
+        if busy {
+            return LOOP_BUSY;
+        }
+        // Without a device or microphone, sleep until the next retry is due
+        // instead of waking every 50 ms; a hotplug message wakes it sooner.
+        let retry_due = [
+            self.device
+                .is_none()
+                .then(|| self.state.reconnect.time_until_next_attempt()),
+            self.monitor
+                .is_none()
+                .then(|| self.monitor_retry.time_until_next_attempt()),
+        ]
+        .into_iter()
+        .flatten()
+        .min();
+        retry_due.map_or(LOOP_IDLE, |due| due.clamp(LOOP_BUSY, LOOP_IDLE))
+    }
+
+    /// Stop the threads, unmute what FocusMute muted and restore the LEDs.
+    fn shutdown(mut self, sync_handle: Option<JoinHandle<()>>) {
+        if let Some(watcher) = self.direct_watcher.take() {
+            watcher.stop();
+        }
+        if let Some(watcher) = self.meter_watcher.take() {
+            watcher.stop();
+        }
+        self.osd.destroy();
+
+        // Cleanup — join background threads, unmute, restore LEDs, then drop
+        // the monitor. Joining before drop ensures the monitor is dropped on
+        // the main thread (important for COM cleanup on Windows).
+        log::info!("[focusmute] shutting down");
+        RUNNING.store(false, Ordering::SeqCst);
+
+        // Timed join helper — waits up to `timeout` for a thread to finish.
+        let timed_join = |handle: JoinHandle<()>, name: &str| {
+            let (done_tx, done_rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = handle.join();
+                let _ = done_tx.send(());
+            });
+            if done_rx.recv_timeout(Duration::from_secs(3)).is_err() {
+                log::warn!("[focusmute] {name} thread did not exit within 3 s — proceeding");
+            }
+        };
+
+        if let Some(handle) = self.bg_handle.take() {
+            timed_join(handle, "poll");
+        }
+        if let Some(handle) = sync_handle {
+            timed_join(handle, "sync");
+        }
+
+        // Undo FocusMute's own mute so the user isn't left silently muted
+        // after exit (the LEDs can no longer indicate it). A mute made
+        // elsewhere, or present before FocusMute watched the microphone,
+        // stays: exiting must not open a microphone someone else closed.
+        if let Some(ref monitor) = self.monitor
+            && monitor.is_muted()
+        {
+            if self.mic.owned_mute {
+                match monitor.unmute_on_exit() {
+                    Ok(()) => log::info!("[mute] unmuted on exit"),
+                    Err(e) => log::warn!("[mute] failed to unmute on exit: {e}"),
+                }
+            } else {
+                log::info!("[mute] left muted on exit: FocusMute did not mute it");
+            }
+        }
+        drop(self.monitor.take());
+
+        // Only restore LEDs if we were muted (i.e. we actually changed them).
+        // Skipping when live avoids a spurious IOCTL that can fail during shutdown.
+        if self.state.indicator.is_muted()
+            && let Some(ref dev) = self.device
+        {
+            self.state.restore_on_exit(dev);
+        }
     }
 }
 
@@ -485,59 +1330,8 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
     if let Some(config_path) = Config::path() {
         log::info!("[config] {}", config_path.display());
     }
-    let sync_banner = if config.system.browser_sync_port > 0 {
-        config.system.browser_sync_port.to_string()
-    } else {
-        "off".to_string()
-    };
-    log::info!(
-        "[focusmute] v{} starting (hotkey={}, ptt={}, inputs={}, color={}, sound={}, notifications={}, log={}, sync={}, reverse={}, blink={}, mic={})",
-        env!("CARGO_PKG_VERSION"),
-        config.keyboard.hotkey,
-        if config.keyboard.push_to_talk_hotkey.is_empty() {
-            "off"
-        } else {
-            &config.keyboard.push_to_talk_hotkey
-        },
-        config.indicator.mute_inputs,
-        config.indicator.mute_color,
-        if config.sound.sound_enabled {
-            "on"
-        } else {
-            "off"
-        },
-        if config.system.notifications_enabled {
-            "on"
-        } else {
-            "off"
-        },
-        config.system.log_level,
-        sync_banner,
-        if config.system.browser_sync_reverse {
-            "on"
-        } else {
-            "off"
-        },
-        if config.indicator.blink_on_talk {
-            "on"
-        } else {
-            "off"
-        },
-        if config.system.scarlett_microphone {
-            "scarlett"
-        } else {
-            "default"
-        },
-    );
-    if !config.hooks.on_mute_url.trim().is_empty() || !config.hooks.on_unmute_url.trim().is_empty()
-    {
-        log::info!(
-            "[hooks] on_mute={:?}, on_unmute={:?}",
-            config.hooks.on_mute_url,
-            config.hooks.on_unmute_url,
-        );
-    }
-    let (mut state, mut device) = match open_device_by_serial(&config.system.device_serial) {
+    log_startup_banner(&config);
+    let (mut state, device) = match open_device_by_serial(&config.system.device_serial) {
         Ok(dev) => {
             let info = dev.info();
             log::info!(
@@ -561,22 +1355,16 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
 
     // Create audio monitor on the main thread. Without a capture device (an
     // autostart that beats the audio driver) it is retried from the loop.
-    let mut main_monitor: Option<Arc<P::Monitor>> =
+    let monitor: Option<Arc<P::Monitor>> =
         P::create_monitor(state.config.system.scarlett_microphone).map(Arc::new);
     let mut monitor_retry = focusmute_lib::reconnect::ReconnectState::with_defaults();
-    if main_monitor.is_none() {
+    if monitor.is_none() {
         monitor_retry.record_failure();
     }
 
-    // Check initial mute state
-    let initial_muted = main_monitor.as_ref().is_some_and(|m| m.is_muted());
-    // A microphone muted before FocusMute watched it is left muted on exit:
-    // FocusMute did not mute it. Any confirmed transition clears this.
-    let mut mic = MicTracking {
-        preexisting_mute: initial_muted,
-        intent: MuteIntent::new(),
-        stale_notified: false,
-    };
+    // A microphone muted before FocusMute watched it is not FocusMute's mute,
+    // so it is left muted on exit (MicTracking::owned_mute starts false).
+    let initial_muted = monitor.as_ref().is_some_and(|m| m.is_muted());
     log::info!(
         "[mute] initial state: {}",
         if initial_muted { "muted" } else { "live" }
@@ -587,7 +1375,7 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
     }
 
     // Init audio/hotkey resources
-    let (mut resources, sound_warnings) = TrayResources::init(&state.config)?;
+    let (resources, sound_warnings) = TrayResources::init(&state.config)?;
     if state.config.system.autostart {
         state::refresh_autostart();
     }
@@ -597,7 +1385,7 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
         &state.config,
         state::TrayView {
             muted: initial_muted,
-            mic: mic_status(main_monitor.as_deref()),
+            mic: mic_status(monitor.as_deref()),
             device: device.as_ref().map(|d| d.info().device_name.clone()),
         },
     );
@@ -640,15 +1428,11 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
     }
 
     // Channel for background → main thread communication.
-    // Each background thread gets its own clone. The main thread keeps one
-    // sender for the on-demand Direct listener, so poll-thread death is
-    // detected with `JoinHandle::is_finished` rather than a disconnect.
     let (tx, rx): (mpsc::Sender<Msg>, Receiver<Msg>) = mpsc::channel();
 
     // Spawn background poll thread
-    let poll_tx = tx.clone();
-    let mut bg_handle = if let Some(ref monitor) = main_monitor {
-        Some(P::spawn_poll_thread(Arc::clone(monitor), poll_tx.clone()))
+    let bg_handle = if let Some(ref monitor) = monitor {
+        Some(P::spawn_poll_thread(Arc::clone(monitor), tx.clone()))
     } else {
         log::warn!("[audio] no microphone yet — retrying in the background");
         None
@@ -671,567 +1455,88 @@ pub fn run_core<P: PlatformAdapter>() -> focusmute_lib::error::Result<()> {
         None
     };
 
-    let direct_tx = tx;
-
     // Register for USB device hotplug notifications (event-driven, no polling).
     P::register_device_notifications();
 
-    // Main event loop
-    let menu_rx = MenuEvent::receiver();
-    let hotkey_rx = GlobalHotKeyEvent::receiver();
-    let mut poll_thread_dead = false;
-    let mut ptt_active = false;
-    let mut ptt_noop_logged = false;
-    let mut browser_sync_pending = false;
-    let mut blink = super::blink::BlinkState::new();
-    let mut direct_gesture = DirectGesture::new();
-    let mut direct_watcher: Option<DirectWatcher> = None;
-    let mut direct_last_spawn: Option<Instant> = None;
-    // No window exists until the first banner is shown.
-    let mut osd = crate::osd::Osd::new();
-    let mut no_mic_notified = false;
-
-    loop {
-        if !RUNNING.load(Ordering::SeqCst) {
-            break;
-        }
-
-        // 1. Platform event pump — dispatches WM_DEVICECHANGE (among others)
-        //    which sets the device-removed flag checked below.
-        P::pump_events();
-
-        // 1a. Microphone monitor: created late when there was no capture
-        //     device at startup, re-bound when Windows picks another default.
-        if main_monitor.is_none() && monitor_retry.should_attempt() {
-            match P::create_monitor(state.config.system.scarlett_microphone) {
-                Some(m) => {
-                    monitor_retry.record_success();
-                    let m = Arc::new(m);
-                    let muted = m.is_muted();
-                    mic.preexisting_mute = muted;
-                    adopt_mute_state(&mut state, device.as_ref(), &tray_menu, muted);
-                    bg_handle = Some(P::spawn_poll_thread(Arc::clone(&m), poll_tx.clone()));
-                    poll_thread_dead = false;
-                    no_mic_notified = false;
-                    main_monitor = Some(m);
-                }
-                None => monitor_retry.record_failure(),
-            }
-        }
-        if let Some(ref m) = main_monitor {
-            // Hot-applies the settings option; a change makes the next
-            // maintain pick the microphone again.
-            m.set_prefer_scarlett(state.config.system.scarlett_microphone);
-            follow_default_mic(
-                &**m,
-                false,
-                &mut state,
-                device.as_ref(),
-                &tray_menu,
-                &mut mic,
-            );
-            if !m.is_stale() {
-                mic.stale_notified = false;
-            }
-        }
-        tray_menu.set_mic(mic_status(main_monitor.as_deref()));
-
-        // 1b. Device removal (RegisterDeviceNotification). The event names no
-        //     device and may belong to another Focusrite interface or to a
-        //     session already replaced, so the handle is asked first. An
-        //     event while no device is open is consumed and ignored.
-        if P::check_device_removed()
-            && let Some(ref dev) = device
-        {
-            if focusmute_lib::device::still_present(dev) {
-                log::debug!("[device] removal event, but the device still answers");
-            } else {
-                log::warn!("[device] removed (USB hotplug event)");
-                device = None;
-                tray_menu.set_device(None);
-            }
-        }
-        // An arriving Focusrite interface makes the next attempt worth trying
-        // now rather than after the backoff.
-        if P::check_device_arrived() && device.is_none() {
-            log::debug!("[device] interface arrived; reconnecting now");
-            state.reset_backoff();
-        }
-
-        // 2. Reconnect
-        if device.is_none()
-            && let Some(new_dev) = state.try_reconnect()
-        {
-            log::info!("[device] reconnected: {}", new_dev.info().device_name);
-            device = Some(new_dev);
-            // A listener still on the previous handle would hear the old
-            // session; let the next sync open one on the new device.
-            if let Some(watcher) = direct_watcher.take() {
-                watcher.stop();
-            }
-            direct_last_spawn = None;
-            tray_menu.set_device(device.as_ref().map(|d| d.info().device_name.as_str()));
-        }
-
-        // Direct is an opt-in gesture on models with panel controls (the
-        // Solo). Its listener thread exists only while the option is on;
-        // notifications arrive as Msg::DirectNotify.
-        let panel = device
-            .as_ref()
-            .and_then(|d| focusmute_lib::models::panel(d.info()))
-            .map(|p| p.controls);
-        let direct_wanted = state.config.hardware_button.direct_button_enabled && panel.is_some();
-        sync_direct_watcher(
-            &mut direct_watcher,
-            &mut direct_last_spawn,
-            direct_wanted,
-            device.as_ref(),
-            &direct_tx,
-        );
-        if !direct_wanted {
-            direct_gesture.cancel();
-        } else if let Some(ref dev) = device
-            && let Some(panel) = panel
-        {
-            let now = Instant::now();
-            if let Some(action) = direct_gesture.tick(now) {
-                apply_direct_action(
-                    dev,
-                    panel,
-                    main_monitor.as_deref(),
-                    main_monitor
-                        .as_deref()
-                        .map_or(state.indicator.is_muted(), |m| {
-                            mic.intent.current(m.is_muted())
-                        }),
-                    &mut direct_gesture,
-                    action,
-                    now,
-                );
-            }
-        }
-        if !state.config.osd.enabled {
-            osd.destroy();
-        }
-
-        // 3. Drain background messages (non-blocking)
-        let mut browser_mute_target: Option<bool> = None;
-        loop {
-            match rx.try_recv() {
-                Ok(Msg::MutePoll { muted, generation }) => {
-                    // Queued before a switch: it describes the previous
-                    // microphone and would pass as a mute or unmute.
-                    if main_monitor
-                        .as_ref()
-                        .is_some_and(|m| m.generation() != generation)
-                    {
-                        log::debug!("[mute] dropped a poll of the previous microphone");
-                        continue;
-                    }
-                    let (action, device_lost) = state.process_mute_poll(muted, device.as_ref());
-                    if device_lost {
-                        log::warn!("[device] disconnected (communication error)");
-                        device = None;
-                        tray_menu.set_device(None);
-                    }
-                    // Captured before the clear below: a pending flag means
-                    // this transition originated in the browser.
-                    let browser_originated = browser_sync_pending;
-                    let suppress_sound =
-                        browser_sync_pending && state.config.sound.suppress_browser_sync_sound;
-                    // Only clear the flag when a real state change fires —
-                    // NoChange means the debouncer hasn't confirmed yet.
-                    if !matches!(action, MonitorAction::NoChange) {
-                        browser_sync_pending = false;
-                        mic.preexisting_mute = false;
-                    }
-                    // Reverse sync: mirror USER-initiated transitions to the
-                    // extension. Browser-originated ones are echoes — the
-                    // meeting page already shows that state.
-                    if state.config.system.browser_sync_reverse && !browser_originated {
-                        match action {
-                            MonitorAction::ApplyMute => {
-                                log::debug!("[sync] reverse action queued: mute");
-                                reverse_slot.set(true);
-                            }
-                            MonitorAction::ClearMute => {
-                                log::debug!("[sync] reverse action queued: unmute");
-                                reverse_slot.set(false);
-                            }
-                            _ => {}
-                        }
-                    }
-                    state::apply_mute_ui(
-                        action,
-                        &tray_menu,
-                        &state,
-                        &mut resources,
-                        suppress_sound,
-                    );
-                    // The OSD reports the microphone, so it works without
-                    // the Scarlett too.
-                    if state.config.osd.enabled {
-                        let kind = match action {
-                            MonitorAction::ApplyMute => Some(crate::osd::OsdKind::Muted),
-                            MonitorAction::ClearMute => Some(crate::osd::OsdKind::Live),
-                            MonitorAction::NoChange => None,
-                        };
-                        if let Some(kind) = kind {
-                            osd.show(
-                                kind,
-                                &state.config.system.language,
-                                &state.config.osd.position,
-                            );
-                        }
-                    }
-                }
-                Ok(Msg::DirectNotify(packet)) => {
-                    // Direct actions run in this pass; a resulting mute change
-                    // arrives as a MutePoll on a following pass.
-                    if direct_wanted
-                        && let Some(ref dev) = device
-                        && let Some(panel) = panel
-                    {
-                        handle_direct_notify(
-                            dev,
-                            panel,
-                            main_monitor.as_deref(),
-                            main_monitor
-                                .as_deref()
-                                .map_or(state.indicator.is_muted(), |m| {
-                                    mic.intent.current(m.is_muted())
-                                }),
-                            state.config.hardware_button.direct_double_click_ms,
-                            &mut direct_gesture,
-                            &packet,
-                        );
-                    }
-                }
-                Ok(Msg::BrowserMute(muted)) => {
-                    // Coalesce: Meet flickers its mute state during join-screen
-                    // render, producing bursts like false→true→false within one
-                    // drain pass. is_muted() is callback-cached and lags set_muted,
-                    // so acting per-message evaluates every message against the
-                    // same stale snapshot and can latch a transient state. Browser
-                    // sync is level-triggered — only the last state matters.
-                    browser_mute_target = Some(muted);
-                }
-                Err(_) => break,
-            }
-        }
-        if !poll_thread_dead && bg_handle.as_ref().is_some_and(|h| h.is_finished()) {
-            log::error!("[audio] monitor thread stopped unexpectedly");
-            poll_thread_dead = true;
-        }
-        if let Some(muted) = browser_mute_target {
-            if let Some(ref m) = main_monitor
-                && m.is_stale()
-            {
-                follow_default_mic(
-                    &**m,
-                    true,
-                    &mut state,
-                    device.as_ref(),
-                    &tray_menu,
-                    &mut mic,
-                );
-            }
-            handle_browser_mute(
-                main_monitor.as_deref(),
-                muted,
-                state.indicator.is_muted(),
-                &mut browser_sync_pending,
-            );
-        }
-
-        // 3c. Muted-talk blink — rides the ~50 ms loop wake; reads meters at
-        // most every METER_INTERVAL while muted with the feature enabled.
-        if state.config.indicator.blink_on_talk
-            && !state.config.indicator.blink_while_muted
-            && state.indicator.is_muted()
-            && let Some(ref dev) = device
-        {
-            let now = std::time::Instant::now();
-            let talking = if blink.meter_due(now) {
-                blink.note_meter_read(now);
-                let read_result =
-                    focusmute_lib::meter::read_meters(dev, focusmute_lib::meter::METER_COUNT);
-                let elapsed = now.elapsed();
-                // A meter read blocks this loop, and the loop applies mute
-                // transitions — slow reads directly delay unmute. Surface it.
-                if elapsed > std::time::Duration::from_millis(50) {
-                    log::warn!("[blink] slow meter read: {} ms", elapsed.as_millis());
-                }
-                match read_result {
-                    Ok(levels) => {
-                        let level = focusmute_lib::meter::max_input_level(
-                            &levels,
-                            &state.indicator.strategy().input_indices,
-                        );
-                        log::debug!(
-                            "[blink] meter read {} ms, level {} (threshold {})",
-                            elapsed.as_millis(),
-                            level,
-                            state.config.indicator.talk_threshold
-                        );
-                        Some(level >= state.config.indicator.talk_threshold)
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "[blink] meter read failed after {} ms: {e}",
-                            elapsed.as_millis()
-                        );
-                        None
-                    }
-                }
-            } else {
-                None
-            };
-            if talking == Some(true) && state.config.osd.enabled {
-                osd.show(
-                    crate::osd::OsdKind::Talking,
-                    &state.config.system.language,
-                    &state.config.osd.position,
-                );
-            }
-            if let Some(action) = blink.advance(now, talking) {
-                apply_blink_action(dev, &state, action);
-            }
-        } else if let Some(action) = blink.reset(state.indicator.is_muted())
-            && let Some(ref dev) = device
-        {
-            apply_blink_action(dev, &state, action);
-        }
-
-        if let Some(ref dev) = device
-            && let Err(error) = state.indicator.animate(dev, Instant::now())
-        {
-            log::debug!("[led] mute blink failed: {error}");
-        }
-
-        // 4. Menu events
-        while let Ok(event) = menu_rx.try_recv() {
-            let is_toggle = event.id() == tray_menu.toggle_item.id();
-            if is_toggle
-                && let Some(ref m) = main_monitor
-                && m.is_stale()
-            {
-                follow_default_mic(
-                    &**m,
-                    true,
-                    &mut state,
-                    device.as_ref(),
-                    &tray_menu,
-                    &mut mic,
-                );
-            }
-            let intent = &mic.intent;
-            let toggle_mute = |_shown_muted: bool| {
-                if let Some(ref m) = main_monitor
-                    && let Err(e) = intent.request(&**m, !intent.current(m.is_muted()))
-                {
-                    log::warn!("[mute] failed to toggle mute: {e}");
-                }
-            };
-            let settings_toggle_callback = main_monitor.as_ref().map(|monitor| {
-                let monitor = Arc::clone(monitor);
-                Arc::new(move || {
-                    let target_muted = !monitor.is_muted();
-                    if let Err(error) = monitor.set_muted(target_muted) {
-                        log::warn!(
-                            "[hotkey] failed to toggle mute while settings are open: {error}"
-                        );
-                    }
-                }) as crate::settings_dialog::SettingsToggleCallback
-            });
-            let (quit, force_reconnect) = state::handle_menu_event(
-                &event,
-                &mut tray_menu,
-                &mut state,
-                &mut device,
-                &mut resources,
-                &toggle_mute,
-                settings_toggle_callback,
-            );
-            if is_toggle && let Some(ref m) = main_monitor {
-                report_stale_mic(&**m, &mut mic, &state.config.system.language);
-            }
-            if quit {
-                RUNNING.store(false, Ordering::SeqCst);
-                break;
-            }
-            if force_reconnect {
-                device = None;
-                tray_menu.set_device(None);
-            }
-        }
-
-        // 5. Hotkey events
-        while let Ok(event) = hotkey_rx.try_recv() {
-            let Some(ref m) = main_monitor else {
-                if !no_mic_notified && event.state == HotKeyState::Pressed {
-                    no_mic_notified = true;
-                    log::warn!("[hotkey] no microphone to mute yet");
-                    crate::notification::Notifier::show_oneshot(crate::i18n::tr(
-                        &state.config.system.language,
-                        "notify_no_mic",
-                    ));
-                }
-                continue;
-            };
-            // A command is about to go out: if Windows moved the default
-            // microphone and the switch failed, try it now rather than in 2 s.
-            // A PTT release counts too: it re-mutes.
-            if m.is_stale() {
-                follow_default_mic(
-                    &**m,
-                    true,
-                    &mut state,
-                    device.as_ref(),
-                    &tray_menu,
-                    &mut mic,
-                );
-            }
-            if event.id == resources.hotkey.toggle_id {
-                // Toggle hotkey: act on press only
-                if event.state != HotKeyState::Pressed {
-                    continue;
-                }
-                ptt_active = false;
-                ptt_noop_logged = false;
-                let target_muted = !mic.intent.current(m.is_muted());
-                log::info!(
-                    "[hotkey] toggle → {}",
-                    if target_muted { "muting" } else { "unmuting" }
-                );
-                if let Err(e) = mic.intent.request(&**m, target_muted) {
-                    log::warn!("[hotkey] failed to set mute state: {e}");
-                    report_stale_mic(&**m, &mut mic, &state.config.system.language);
-                }
-            } else if resources.hotkey.ptt_id.is_some_and(|id| event.id == id) {
-                // PTT hotkey: press = unmute (if muted), release = re-mute (if PTT activated)
-                match event.state {
-                    HotKeyState::Pressed => {
-                        if mic.intent.current(m.is_muted()) {
-                            ptt_noop_logged = false;
-                            log::info!("[ptt] held → unmuting");
-                            // Only an unmute that went out is undone on
-                            // release; otherwise release would mute a
-                            // microphone PTT never touched.
-                            match mic.intent.request(&**m, false) {
-                                Ok(()) => ptt_active = true,
-                                Err(e) => {
-                                    log::warn!("[ptt] failed to unmute: {e}");
-                                    report_stale_mic(&**m, &mut mic, &state.config.system.language);
-                                }
-                            }
-                        } else if !ptt_noop_logged {
-                            ptt_noop_logged = true;
-                            log::debug!("[ptt] already unmuted, ignoring press");
-                        }
-                    }
-                    HotKeyState::Released => {
-                        if ptt_active {
-                            ptt_active = false;
-                            log::info!("[ptt] released → re-muting");
-                            if let Err(e) = mic.intent.request(&**m, true) {
-                                log::warn!("[ptt] failed to re-mute: {e}");
-                                report_stale_mic(&**m, &mut mic, &state.config.system.language);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // 6. Wait for events (platform-specific sleep/block). Short only
-        //    while something is timed; otherwise wakes come from messages.
-        let talk_watch = state.config.indicator.blink_on_talk
-            && !state.config.indicator.blink_while_muted
-            && state.indicator.is_muted();
-        let busy = direct_gesture.is_pending()
-            || state.indicator.is_animating()
-            || (talk_watch && device.is_some());
-        // Without a device or microphone, sleep until the next retry is due
-        // instead of waking every 50 ms; a hotplug message wakes it sooner.
-        let retry_due = [
-            device
-                .is_none()
-                .then(|| state.reconnect.time_until_next_attempt()),
-            main_monitor
-                .is_none()
-                .then(|| monitor_retry.time_until_next_attempt()),
-        ]
-        .into_iter()
-        .flatten()
-        .min();
-        let timeout = if busy {
-            LOOP_BUSY
-        } else {
-            retry_due.map_or(LOOP_IDLE, |due| due.clamp(LOOP_BUSY, LOOP_IDLE))
-        };
-        P::wait_for_events(timeout);
-    }
-
-    if let Some(watcher) = direct_watcher.take() {
-        watcher.stop();
-    }
-    osd.destroy();
-    drop(direct_tx);
-
-    // Cleanup — join background threads, unmute, restore LEDs, then drop monitor.
-    // Joining before drop ensures the monitor is dropped on the main thread
-    // (important for COM cleanup on Windows).
-    log::info!("[focusmute] shutting down");
-    RUNNING.store(false, Ordering::SeqCst);
-
-    // Timed join helper — waits up to `timeout` for a thread to finish.
-    let timed_join = |handle: JoinHandle<()>, name: &str| {
-        let (done_tx, done_rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = handle.join();
-            let _ = done_tx.send(());
-        });
-        if done_rx
-            .recv_timeout(std::time::Duration::from_secs(3))
-            .is_err()
-        {
-            log::warn!("[focusmute] {name} thread did not exit within 3 s — proceeding");
-        }
+    let mut core = TrayCore::<P> {
+        state,
+        device,
+        monitor,
+        monitor_retry,
+        mic: MicTracking::new(),
+        resources,
+        tray_menu,
+        rx,
+        tx,
+        bg_handle,
+        poll_thread_dead: false,
+        reverse_slot,
+        blink: super::blink::BlinkState::new(),
+        direct_gesture: DirectGesture::new(),
+        direct_watcher: None,
+        direct_last_spawn: None,
+        meter_watcher: None,
+        meter_last_failure: None,
+        next_inline_meter: None,
+        osd: crate::osd::Osd::new(),
+        no_mic_notified: false,
+        quit: false,
     };
 
-    if let Some(handle) = bg_handle {
-        timed_join(handle, "poll");
-    }
-    if let Some(handle) = sync_handle {
-        timed_join(handle, "sync");
-    }
-
-    // Unmute so the user isn't left silently muted after exit (LEDs return
-    // to normal state and can no longer indicate mute). A microphone that was
-    // already muted when FocusMute started watching it stays muted.
-    if let Some(ref monitor) = main_monitor
-        && monitor.is_muted()
-    {
-        if mic.preexisting_mute {
-            log::info!("[mute] left muted on exit: it was muted before FocusMute");
-        } else {
-            match monitor.unmute_on_exit() {
-                Ok(()) => log::info!("[mute] unmuted on exit"),
-                Err(e) => log::warn!("[mute] failed to unmute on exit: {e}"),
-            }
+    while RUNNING.load(Ordering::SeqCst) && !core.quit {
+        // Platform event pump — dispatches WM_DEVICECHANGE (among others),
+        // which sets the device-removed flag the step checks.
+        P::pump_events();
+        core.step(None);
+        if core.quit {
+            break;
         }
+        P::wait_for_events(core.wait_timeout());
     }
-    drop(main_monitor);
 
-    // Only restore LEDs if we were muted (i.e. we actually changed them).
-    // Skipping when live avoids a spurious IOCTL that can fail during shutdown.
-    if state.indicator.is_muted()
-        && let Some(ref dev) = device
-    {
-        state.restore_on_exit(dev);
-    }
+    core.shutdown(sync_handle);
     Ok(())
+}
+
+/// The configuration summary logged once at start.
+fn log_startup_banner(config: &Config) {
+    let on_off = |on: bool| if on { "on" } else { "off" };
+    let sync_banner = if config.system.browser_sync_port > 0 {
+        config.system.browser_sync_port.to_string()
+    } else {
+        "off".to_string()
+    };
+    log::info!(
+        "[focusmute] v{} starting (hotkey={}, ptt={}, inputs={}, color={}, sound={}, notifications={}, log={}, sync={}, reverse={}, blink={}, mic={})",
+        env!("CARGO_PKG_VERSION"),
+        config.keyboard.hotkey,
+        if config.keyboard.push_to_talk_hotkey.is_empty() {
+            "off"
+        } else {
+            &config.keyboard.push_to_talk_hotkey
+        },
+        config.indicator.mute_inputs,
+        config.indicator.mute_color,
+        on_off(config.sound.sound_enabled),
+        on_off(config.system.notifications_enabled),
+        config.system.log_level,
+        sync_banner,
+        on_off(config.system.browser_sync_reverse),
+        on_off(config.indicator.blink_on_talk),
+        if config.system.scarlett_microphone {
+            "scarlett"
+        } else {
+            "default"
+        },
+    );
+    if !config.hooks.on_mute_url.trim().is_empty() || !config.hooks.on_unmute_url.trim().is_empty()
+    {
+        log::info!(
+            "[hooks] on_mute={:?}, on_unmute={:?}",
+            config.hooks.on_mute_url,
+            config.hooks.on_unmute_url,
+        );
+    }
 }
 
 /// Perform a blink LED action: the off-phase blanks the indicator's number
@@ -1431,6 +1736,43 @@ mod tests {
                 generation: 3
             }
         ));
+    }
+
+    /// A confirmed mute that answers FocusMute's request is FocusMute's; the
+    /// request is used up, so a later mute made elsewhere is not.
+    #[test]
+    fn only_a_requested_transition_is_confirmed_as_own() {
+        let intent = MuteIntent::new();
+        assert!(intent.confirms(true).is_none(), "nothing was requested");
+        intent.request(&LaggyMonitor::new(false), true).unwrap();
+        assert!(intent.confirms(false).is_none(), "the other direction");
+        assert!(intent.confirms(true).is_some());
+        assert!(intent.confirms(true).is_none(), "the request is used up");
+    }
+
+    /// Reading the toggle baseline must not lose the request: a confirmed
+    /// mute is still attributed after `current` forgot the pending target.
+    #[test]
+    fn confirmation_survives_reading_the_toggle_state() {
+        let intent = MuteIntent::new();
+        intent.request(&LaggyMonitor::new(false), true).unwrap();
+        assert!(intent.current(true), "the monitor reports the mute");
+        assert!(intent.confirms(true).is_some());
+    }
+
+    /// Nothing tied to the previous microphone survives a switch: a held
+    /// push-to-talk must not re-mute the new one on release, a browser
+    /// command must not swallow its next beep, and its mute is not ours.
+    #[test]
+    fn a_switch_drops_the_previous_microphone_state() {
+        let mut mic = MicTracking::new();
+        mic.owned_mute = true;
+        mic.ptt_active = true;
+        mic.browser_sync_pending = true;
+        mic.intent.request(&LaggyMonitor::new(false), true).unwrap();
+        mic.switched();
+        assert!(!mic.owned_mute && !mic.ptt_active && !mic.browser_sync_pending);
+        assert!(mic.intent.confirms(true).is_none());
     }
 
     /// A failed command is not remembered: the next toggle starts again

@@ -355,13 +355,15 @@ pub(crate) fn play_sound(sound: &DecodedSound, volume: f32) {
             SND_MEMORY | SND_ASYNC | SND_NODEFAULT,
         )
     };
-    if !ok.as_bool() {
-        log::warn!("[sound] PlaySound failed");
-    }
     if playing.len() > 2 {
         playing.remove(0);
     }
-    log::debug!("[sound] playback started (volume={:.0}%)", volume * 100.0);
+    if ok.as_bool() {
+        // The call returned; the sound reaches the output ~20-30 ms later.
+        log::debug!("[sound] playback queued (volume={:.0}%)", volume * 100.0);
+    } else {
+        log::warn!("[sound] PlaySound failed");
+    }
 }
 
 /// Play a pre-decoded sound on a short-lived background thread.

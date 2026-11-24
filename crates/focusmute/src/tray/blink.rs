@@ -1,18 +1,18 @@
 //! Muted-talk LED blink driver.
 //!
-//! Rides the main event loop's ~50 ms wake cadence (both platform adapters
-//! tick at 50 ms): while the mic is muted and `blink_on_talk` is enabled,
-//! the loop reads the input meters every [`METER_INTERVAL`] and blinks the
-//! mute indicator while the level exceeds `talk_threshold` — the "you're
-//! talking but muted" warning.
+//! Rides the main event loop's ~50 ms wake cadence: while the mic is muted
+//! and `blink_on_talk` is enabled, the input meters are read every
+//! [`METER_INTERVAL`] (on their own thread where the platform allows) and the
+//! loop blinks the mute indicator while the level exceeds `talk_threshold` —
+//! the "you're talking but muted" warning.
 //!
 //! The state machine here is pure (no device I/O); the caller performs the
 //! [`LedAction`]s it returns, so transitions are unit-testable.
 
 use std::time::{Duration, Instant};
 
-/// How often to read the meters. The loop wakes every ~50 ms; Focusrite
-/// Control 2 itself polls at ~22.5 Hz, so ~11 Hz is comfortably gentle.
+/// How often the meter thread reads the meters. Focusrite Control 2 itself
+/// polls at ~22.5 Hz, so ~11 Hz is comfortably gentle.
 pub const METER_INTERVAL: Duration = Duration::from_millis(90);
 /// Blink phase length (on ↔ off cadence).
 const BLINK_PERIOD: Duration = Duration::from_millis(250);
@@ -34,7 +34,6 @@ pub struct BlinkState {
     blinking: bool,
     /// The current phase has the LEDs off.
     phase_off: bool,
-    next_meter_at: Option<Instant>,
     next_toggle_at: Instant,
     /// When the quiet period ends the blink (None while talking).
     quiet_deadline: Option<Instant>,
@@ -45,24 +44,13 @@ impl BlinkState {
         Self {
             blinking: false,
             phase_off: false,
-            next_meter_at: None,
             next_toggle_at: Instant::now(),
             quiet_deadline: None,
         }
     }
 
-    /// True when a fresh meter read is due.
-    pub fn meter_due(&self, now: Instant) -> bool {
-        self.next_meter_at.is_none_or(|at| now >= at)
-    }
-
-    /// Record that a meter read happened.
-    pub fn note_meter_read(&mut self, now: Instant) {
-        self.next_meter_at = Some(now + METER_INTERVAL);
-    }
-
     /// Advance the state machine. `talking` is the thresholded verdict of a
-    /// fresh meter read, or `None` when no reading happened this tick.
+    /// fresh meter read, or `None` when no reading arrived this tick.
     pub fn advance(&mut self, now: Instant, talking: Option<bool>) -> Option<LedAction> {
         match talking {
             Some(true) => {
@@ -117,7 +105,6 @@ impl BlinkState {
         self.blinking = false;
         self.phase_off = false;
         self.quiet_deadline = None;
-        self.next_meter_at = None;
         if was_off && still_muted {
             Some(LedAction::Solid)
         } else {
@@ -237,15 +224,5 @@ mod tests {
         let mut b = BlinkState::new();
         b.advance(t0(), Some(true)); // off-phase
         assert_eq!(b.reset(false), None);
-    }
-
-    #[test]
-    fn meter_read_rate_limited() {
-        let mut b = BlinkState::new();
-        let now = t0();
-        assert!(b.meter_due(now));
-        b.note_meter_read(now);
-        assert!(!b.meter_due(now + Duration::from_millis(50)));
-        assert!(b.meter_due(now + METER_INTERVAL));
     }
 }

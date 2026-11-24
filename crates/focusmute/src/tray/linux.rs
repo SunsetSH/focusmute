@@ -67,6 +67,12 @@ impl PlatformAdapter for LinuxAdapter {
         }
     }
 
+    /// The settings window runs winit's loop, which does not dispatch GTK
+    /// events: the tray menu would not open while it is shown.
+    fn pump_events_nested() {
+        Self::pump_events();
+    }
+
     fn wait_for_events(_timeout: Duration) {
         // Block until the next GTK event. The 50ms timer registered in
         // platform_init() guarantees we wake up frequently enough to

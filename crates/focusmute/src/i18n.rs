@@ -129,6 +129,7 @@ pub fn tr(language: &str, key: &str) -> &'static str {
         "mic_unnamed" => "без имени",
         "mic_missing_hint" => "В Windows нет устройства записи",
         "mic_switching" => "ожидание нового микрофона",
+        "mic_not_default" => "не микрофон Windows по умолчанию",
         "scarlett_disconnected" => "Scarlett отключена",
         "notify_muted" => "Микрофон выключен",
         "notify_live" => "Микрофон включён",
@@ -138,6 +139,7 @@ pub fn tr(language: &str, key: &str) -> &'static str {
         "notify_mic_not_ready" => {
             "Windows сменила микрофон по умолчанию, но он ещё не готов. FocusMute продолжает попытки."
         }
+        "sound_file_invalid" => "Не удалось прочитать звуковой файл как WAV: {path}",
         "notify_first_run" => {
             "FocusMute запущен. Горячая клавиша: {hotkey}. Настройки — правой кнопкой по значку в трее."
         }
@@ -277,6 +279,7 @@ fn english(key: &str) -> &'static str {
         "mic_unnamed" => "unnamed",
         "mic_missing_hint" => "Windows reports no recording device",
         "mic_switching" => "waiting for the new microphone",
+        "mic_not_default" => "not the Windows default microphone",
         "scarlett_disconnected" => "Scarlett disconnected",
         "notify_muted" => "Microphone Muted",
         "notify_live" => "Microphone Live",
@@ -286,6 +289,7 @@ fn english(key: &str) -> &'static str {
         "notify_mic_not_ready" => {
             "Windows switched the default microphone, but it is not ready yet. FocusMute keeps trying."
         }
+        "sound_file_invalid" => "Could not read the sound file as WAV: {path}",
         "notify_first_run" => {
             "FocusMute running. Hotkey: {hotkey}. Right-click tray icon for settings."
         }
@@ -321,11 +325,13 @@ mod tests {
             "mic_unnamed",
             "mic_missing_hint",
             "mic_switching",
+            "mic_not_default",
             "scarlett_disconnected",
             "notify_muted",
             "notify_live",
             "notify_no_mic",
             "notify_mic_not_ready",
+            "sound_file_invalid",
             "notify_first_run",
             "notify_hotkey_failed",
             "notify_ptt_failed",

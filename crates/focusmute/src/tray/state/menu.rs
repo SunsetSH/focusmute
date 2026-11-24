@@ -20,8 +20,14 @@ pub enum MicStatus {
     /// Windows reports no capture device yet.
     Missing,
     /// The microphone mute applies to. `stale` while Windows has moved the
-    /// default microphone and FocusMute could not open the new one yet.
-    Watching { name: Option<String>, stale: bool },
+    /// default microphone and FocusMute could not open the new one yet;
+    /// `not_default` while it is a Scarlett input other than the default
+    /// microphone apps record from.
+    Watching {
+        name: Option<String>,
+        stale: bool,
+        not_default: bool,
+    },
 }
 
 /// Everything the tray icon, tooltip and information lines show. Kept in one
@@ -50,6 +56,16 @@ fn tooltip(language: &str, view: &TrayView) -> String {
         text.push_str(" · ");
         text.push_str(tr(language, "mic_switching"));
     }
+    if matches!(
+        view.mic,
+        MicStatus::Watching {
+            not_default: true,
+            ..
+        }
+    ) {
+        text.push_str(" · ");
+        text.push_str(tr(language, "mic_not_default"));
+    }
     if view.device.is_none() {
         text.push_str(" · ");
         text.push_str(tr(language, "scarlett_disconnected"));
@@ -69,7 +85,11 @@ fn tooltip(language: &str, view: &TrayView) -> String {
 fn mic_line(language: &str, mic: &MicStatus) -> String {
     match mic {
         MicStatus::Missing => tr(language, "mic_missing_hint").to_string(),
-        MicStatus::Watching { name, stale } => {
+        MicStatus::Watching {
+            name,
+            stale,
+            not_default,
+        } => {
             let name = name
                 .as_deref()
                 .filter(|n| !n.is_empty())
@@ -77,6 +97,9 @@ fn mic_line(language: &str, mic: &MicStatus) -> String {
             let mut line = format!("{}: {name}", tr(language, "mic_label"));
             if *stale {
                 line.push_str(&format!(" ({})", tr(language, "mic_switching")));
+            }
+            if *not_default {
+                line.push_str(&format!(" ({})", tr(language, "mic_not_default")));
             }
             line
         }
@@ -333,6 +356,7 @@ mod tests {
             mic: MicStatus::Watching {
                 name: mic.map(str::to_owned),
                 stale: false,
+                not_default: false,
             },
             device: device.then(|| "Scarlett Solo 4th Gen-000171cf".to_owned()),
         }
@@ -367,6 +391,7 @@ mod tests {
         v.mic = MicStatus::Watching {
             name: Some("Webcam".into()),
             stale: true,
+            not_default: false,
         };
         assert_eq!(
             tooltip("en", &v),
@@ -385,6 +410,26 @@ mod tests {
         }
     }
 
+    /// Muting a Scarlett input that is not the default leaves the default
+    /// microphone live; the tray must say so.
+    #[test]
+    fn a_scarlett_input_other_than_the_default_is_marked() {
+        let mut v = view(true, Some("Analogue 1 + 2 (Focusrite USB Audio)"), true);
+        v.mic = MicStatus::Watching {
+            name: Some("Analogue 1 + 2 (Focusrite USB Audio)".into()),
+            stale: false,
+            not_default: true,
+        };
+        assert_eq!(
+            tooltip("en", &v),
+            "FocusMute — Muted · not the Windows default microphone · Analogue 1 + 2 (Focusrite USB Audio)"
+        );
+        assert_eq!(
+            mic_line("ru", &v.mic),
+            "Микрофон: Analogue 1 + 2 (Focusrite USB Audio) (не микрофон Windows по умолчанию)"
+        );
+    }
+
     #[test]
     fn menu_line_names_the_microphone() {
         assert_eq!(
@@ -392,7 +437,8 @@ mod tests {
                 "en",
                 &MicStatus::Watching {
                     name: Some("Webcam".into()),
-                    stale: false
+                    stale: false,
+                    not_default: false,
                 }
             ),
             "Microphone: Webcam"
@@ -402,7 +448,8 @@ mod tests {
                 "ru",
                 &MicStatus::Watching {
                     name: None,
-                    stale: true
+                    stale: true,
+                    not_default: false,
                 }
             ),
             "Микрофон: без имени (ожидание нового микрофона)"

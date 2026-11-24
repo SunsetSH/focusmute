@@ -10,13 +10,12 @@ use focusmute_lib::device::{PlatformDevice, ScarlettDevice, open_device_by_seria
 use focusmute_lib::led;
 use focusmute_lib::meter;
 use focusmute_lib::models::Panel;
-use global_hotkey::{GlobalHotKeyEvent, HotKeyState, hotkey::HotKey};
 #[cfg(windows)]
 use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 
 use super::{
-    MAX_SOUND_FILE_BYTES, SettingsToggleCallback, SoundPreviewPlayer, combo_to_mute_inputs,
-    inputs_combo_items,
+    MAX_SOUND_FILE_BYTES, SoundPreviewPlayer, TrayTick, combo_to_mute_inputs, inputs_combo_items,
+    wav_error,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -58,7 +57,11 @@ fn sensitivity_text(threshold: u32) -> String {
         .unwrap_or_else(|| format!("Custom ({threshold})"))
 }
 
-pub struct SettingsApp {
+/// How often the tray step runs while the window is idle. Background events
+/// also repaint the window at once through [`crate::tray::wake`].
+const TRAY_TICK: Duration = Duration::from_millis(50);
+
+pub struct SettingsApp<'t> {
     // ── Form state ──
     color_text: String,
     color_rgb: [f32; 3],
@@ -91,10 +94,9 @@ pub struct SettingsApp {
     led_lab_result: String,
     led_lab_touched: bool,
 
-    // The hotkey remains registered by the tray while this modal UI owns the
-    // main thread. Poll its shared receiver here so mute still works.
-    registered_toggle_id: Option<u32>,
-    toggle_callback: Option<SettingsToggleCallback>,
+    // The tray keeps running through this while the modal UI owns the main
+    // thread: mute, hotkeys and device events are handled as usual.
+    tray_tick: Option<TrayTick<'t>>,
 
     sound_enabled: bool,
     suppress_browser_sync_sound: bool,
@@ -232,7 +234,7 @@ fn capture_pressed_hotkey(ctx: &egui::Context) -> Option<Option<String>> {
         })
     })
 }
-impl SettingsApp {
+impl<'t> SettingsApp<'t> {
     /// Capture a shortcut using the native key state on Windows. egui exposes
     /// only a limited logical-key set (notably it omits Pause), while the
     /// hotkey parser accepts Win32 virtual keys.
@@ -251,30 +253,16 @@ impl SettingsApp {
             self.capturing = None;
         }
     }
-    fn forward_registered_toggle_hotkey(&self) {
-        let Some(toggle_id) = self.registered_toggle_id else {
-            return;
-        };
-        while let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
-            if self.capturing.is_none()
-                && event.id == toggle_id
-                && event.state == HotKeyState::Pressed
-                && let Some(callback) = &self.toggle_callback
-            {
-                callback();
-            }
-        }
-    }
-
     pub fn new(
         config: Config,
         input_count: usize,
         is_solo: bool,
         device_lines: Vec<(String, String)>,
         result: Arc<Mutex<Option<Config>>>,
-        toggle_callback: Option<SettingsToggleCallback>,
+        tray_tick: Option<TrayTick<'t>>,
         cc: &eframe::CreationContext<'_>,
     ) -> Self {
+        crate::tray::wake::set_settings_context(Some(cc.egui_ctx.clone()));
         // Apply widget style customizations
         let mut style = (*cc.egui_ctx.global_style()).clone();
         let corner_radius = egui::CornerRadius::same(4);
@@ -288,12 +276,6 @@ impl SettingsApp {
             .ok()
             .map(led::color_to_rgb)
             .unwrap_or([1.0, 0.0, 0.0]);
-        let registered_toggle_id = config
-            .keyboard
-            .hotkey
-            .parse::<HotKey>()
-            .ok()
-            .map(|hotkey| hotkey.id());
         let (mut mute_inputs_items, mute_inputs_index) = inputs_combo_items(&config, input_count);
         if is_solo && input_count == 2 {
             mute_inputs_items = if config.system.language.eq_ignore_ascii_case("ru") {
@@ -351,8 +333,7 @@ impl SettingsApp {
             led_lab_index: 4,
             led_lab_result: String::new(),
             led_lab_touched: false,
-            registered_toggle_id,
-            toggle_callback,
+            tray_tick,
 
             sound_enabled: config.sound.sound_enabled,
             suppress_browser_sync_sound: config.sound.suppress_browser_sync_sound,
@@ -646,8 +627,9 @@ struct FormSnapshot {
     talk_threshold: u32,
 }
 
-impl Drop for SettingsApp {
+impl Drop for SettingsApp<'_> {
     fn drop(&mut self) {
+        crate::tray::wake::set_settings_context(None);
         if self.led_lab_touched
             && let Some(device) = &self.meter_device
             && let Err(error) = led::solo::restore_test(
@@ -661,7 +643,18 @@ impl Drop for SettingsApp {
     }
 }
 
-impl eframe::App for SettingsApp {
+impl eframe::App for SettingsApp<'_> {
+    /// Runs every frame, and also while the window is minimized: the tray
+    /// step must not stop with the window out of sight.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if let Some(tick) = self.tray_tick.as_mut()
+            && !tick(self.capturing.is_some())
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        ctx.request_repaint_after(TRAY_TICK);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         // eframe 0.34: the root Ui replaces the Context parameter. Keep a
         // `ctx` binding so viewport commands and &Context helpers read as before.
@@ -669,21 +662,21 @@ impl eframe::App for SettingsApp {
         let ctx = &ctx;
         let language = self.language.clone();
         let tr = |key| crate::i18n::tr(&language, key);
-        self.forward_registered_toggle_hotkey();
         self.capture_hotkey(ctx);
-        // Fast repaints only while capturing a shortcut. 100 ms still forwards
-        // the toggle hotkey promptly; the level meter schedules its own 90 ms.
-        ctx.request_repaint_after(Duration::from_millis(if self.capturing.is_some() {
-            30
-        } else {
-            100
-        }));
+        // Fast repaints while capturing a shortcut; otherwise `logic` keeps
+        // the tray step going and the level meter schedules its own 90 ms.
+        if self.capturing.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(30));
+        }
         // Height of the button area below content (separator + padding + buttons).
         const BUTTON_AREA_HEIGHT: f32 = 54.0;
 
         // Snapshot form state before rendering — if anything changes,
         // clear stale validation errors so the Save button stays reachable.
         let form_snap = self.form_snapshot();
+        // Problems found with a chosen or played sound file this frame. Added
+        // after the stale-error clearing below, which the new path triggers.
+        let mut sound_errors: Vec<String> = Vec::new();
 
         let mut content_bottom = 0.0_f32;
         egui::CentralPanel::default().show(ui, |ui| {
@@ -912,6 +905,7 @@ impl eframe::App for SettingsApp {
                             if ui.button(tr("browse")).clicked()
                                 && let Some(path) = browse_wav_file()
                             {
+                                sound_errors.extend(wav_error(&language, &path));
                                 self.mute_sound_path = path;
                             }
                             ui.add(
@@ -922,7 +916,7 @@ impl eframe::App for SettingsApp {
                         });
                         ui.end_row();
 
-                        volume_row(
+                        if let Some(error) = volume_row(
                             ui,
                             browse_btn_width,
                             sound_control_width,
@@ -934,7 +928,9 @@ impl eframe::App for SettingsApp {
                                 event: crate::sound::SoundEvent::Mute,
                             },
                             &mut self.preview_player,
-                        );
+                        ) {
+                            sound_errors.push(error);
+                        }
 
                         ui.label(tr("unmute_sound"));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -944,6 +940,7 @@ impl eframe::App for SettingsApp {
                             if ui.button(tr("browse")).clicked()
                                 && let Some(path) = browse_wav_file()
                             {
+                                sound_errors.extend(wav_error(&language, &path));
                                 self.unmute_sound_path = path;
                             }
                             ui.add(
@@ -954,7 +951,7 @@ impl eframe::App for SettingsApp {
                         });
                         ui.end_row();
 
-                        volume_row(
+                        if let Some(error) = volume_row(
                             ui,
                             browse_btn_width,
                             sound_control_width,
@@ -966,7 +963,9 @@ impl eframe::App for SettingsApp {
                                 event: crate::sound::SoundEvent::Unmute,
                             },
                             &mut self.preview_player,
-                        );
+                        ) {
+                            sound_errors.push(error);
+                        }
                     });
             });
 
@@ -1261,6 +1260,11 @@ impl eframe::App for SettingsApp {
         if !self.errors.is_empty() && form_snap != self.form_snapshot() {
             self.errors.clear();
         }
+        for error in sound_errors {
+            if !self.errors.contains(&error) {
+                self.errors.push(error);
+            }
+        }
 
         // Always enforce content-driven height (locks vertical resize) while
         // preserving the user's chosen width (horizontal resize is free).
@@ -1411,6 +1415,13 @@ pub(crate) fn build_and_validate_config(p: &ValidateParams<'_>) -> Result<Config
             errors.push(e.to_string());
         }
     }
+    // The config check sees the path, size and extension; a file that passes
+    // it but does not decode would silently play the built-in sound.
+    errors.extend(
+        [p.mute_sound_path, p.unmute_sound_path]
+            .into_iter()
+            .filter_map(|path| wav_error(p.language, path)),
+    );
 
     // Validate hotkey syntax (global-hotkey crate parsing)
     let hotkey_str = p.hotkey.trim();
@@ -1450,6 +1461,7 @@ pub(crate) fn build_and_validate_config(p: &ValidateParams<'_>) -> Result<Config
 }
 
 /// Render a volume slider row inside a sound grid (label + RTL: slider, DragValue, Play).
+/// Returns why a custom file was replaced by the built-in sound on Play.
 fn volume_row(
     ui: &mut egui::Ui,
     browse_btn_width: f32,
@@ -1458,13 +1470,20 @@ fn volume_row(
     volume: &mut f32,
     source: SoundSource<'_>,
     preview_player: &mut SoundPreviewPlayer,
-) {
+) -> Option<String> {
+    let mut error = None;
     ui.label(crate::i18n::tr(language, "volume"));
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let play_btn = egui::Button::new(crate::i18n::tr(language, "play"))
             .min_size(egui::vec2(browse_btn_width, 0.0));
-        if ui.add(play_btn).clicked() {
-            preview_player.play(source.path, source.preset, source.event, *volume);
+        if ui.add(play_btn).clicked()
+            && !preview_player.play(source.path, source.preset, source.event, *volume)
+        {
+            error = Some(crate::i18n::trf(
+                language,
+                "sound_file_invalid",
+                &[("path", source.path.trim())],
+            ));
         }
         let mut pct = *volume * 100.0;
         if ui
@@ -1489,6 +1508,7 @@ fn volume_row(
         );
     });
     ui.end_row();
+    error
 }
 
 /// What a volume row's Play button previews.

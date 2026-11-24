@@ -249,13 +249,19 @@ pub fn run(cmd: Command, json: bool, config_path: Option<&Path>) -> Result<()> {
             if json {
                 warn_json_unsupported("mute");
             }
-            mute::cmd_set_mute(mute::MuteAction::Mute)
+            mute::cmd_set_mute(
+                mute::MuteAction::Mute,
+                load_config(config_path).system.scarlett_microphone,
+            )
         }
         Command::Unmute => {
             if json {
                 warn_json_unsupported("unmute");
             }
-            mute::cmd_set_mute(mute::MuteAction::Unmute)
+            mute::cmd_set_mute(
+                mute::MuteAction::Unmute,
+                load_config(config_path).system.scarlett_microphone,
+            )
         }
         Command::Devices => devices::cmd_devices(json),
     }

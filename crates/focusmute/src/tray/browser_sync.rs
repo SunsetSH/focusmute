@@ -550,8 +550,10 @@ mod tests {
     fn reverse_slot_discards_stale_actions() {
         let slot = ReverseSlot::new();
         slot.set(true);
-        // A zero max-age makes any recorded action stale.
-        assert_eq!(slot.take_fresh(Duration::ZERO), None);
+        // Two calls can land on the same clock tick, so wait for one to pass
+        // rather than rely on a zero max-age.
+        std::thread::sleep(Duration::from_millis(5));
+        assert_eq!(slot.take_fresh(Duration::from_millis(1)), None);
         // Stale take still consumes the slot.
         assert_eq!(slot.take_fresh(MAX_ACTION_AGE), None);
     }

@@ -88,9 +88,15 @@ fn init_tray_logger() {
         if let Some(dir) = log_path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
+        roll_over_log(&log_path, MAX_LOG_BYTES);
         // FileSpec from the full path: directory + basename + suffix.
         let file_spec = FileSpec::try_from(log_path).unwrap_or_default();
-        logger.log_to_file(file_spec).write_mode(WriteMode::Direct)
+        // Appending keeps the previous session: a problem the user reports
+        // after restarting must still be in the log.
+        logger
+            .log_to_file(file_spec)
+            .append()
+            .write_mode(WriteMode::Direct)
     } else {
         logger
     };
@@ -100,6 +106,27 @@ fn init_tray_logger() {
             let _ = LOGGER_HANDLE.set(handle);
         }
         Err(e) => eprintln!("Failed to initialize logger: {e}"),
+    }
+}
+
+/// Size at which the log is moved aside on start.
+const MAX_LOG_BYTES: u64 = 1_000_000;
+
+/// Move `path` to `<name>.old.<ext>` once it has grown past `max_bytes`, so
+/// the appended log keeps one previous generation instead of growing forever.
+/// The rotation happens only at start: the file name stays the one the
+/// documentation names.
+fn roll_over_log(path: &std::path::Path, max_bytes: u64) {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return;
+    };
+    if meta.len() <= max_bytes {
+        return;
+    }
+    let old = path.with_extension("old.log");
+    let _ = std::fs::remove_file(&old);
+    if let Err(e) = std::fs::rename(path, &old) {
+        eprintln!("Could not rotate {}: {e}", path.display());
     }
 }
 
@@ -176,4 +203,30 @@ fn show_fatal_error(msg: &str) {
 #[cfg(not(windows))]
 fn show_fatal_error(_msg: &str) {
     // On non-Windows platforms, eprintln above is visible from the terminal.
+}
+
+#[cfg(test)]
+mod tests {
+    use super::roll_over_log;
+
+    #[test]
+    fn log_is_moved_aside_only_past_the_limit() {
+        let dir = std::env::temp_dir().join("focusmute_test_log_rollover");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("focusmute.log");
+        let old = dir.join("focusmute.old.log");
+
+        std::fs::write(&log, b"small").unwrap();
+        roll_over_log(&log, 10);
+        assert!(log.exists() && !old.exists(), "a small log is kept");
+
+        std::fs::write(&old, b"older").unwrap();
+        std::fs::write(&log, b"past the limit").unwrap();
+        roll_over_log(&log, 10);
+        assert!(!log.exists());
+        assert_eq!(std::fs::read(&old).unwrap(), b"past the limit");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

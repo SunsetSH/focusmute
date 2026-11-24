@@ -86,6 +86,10 @@ fn restore_number_leds(device: &impl ScarlettDevice, strategy: &MuteStrategy) ->
 
 /// Turn the muted number LEDs off — the dark half of a mute blink.
 ///
+/// Only the number LEDs blink. In the `extended` mode the extra LEDs the
+/// indicator paints stay lit, so the mute stays visible through the dark
+/// half; `golden/led_ops.txt` (`extended … blank`) records this.
+///
 /// Uses the single-LED path only: the bulk `directLEDValues` array is not
 /// calibrated on every model, and DATA_NOTIFY(5) blanks independent LEDs on
 /// the Solo.

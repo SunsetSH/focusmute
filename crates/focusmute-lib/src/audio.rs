@@ -71,6 +71,13 @@ pub trait MuteMonitor {
     fn device_name(&self) -> Option<String> {
         None
     }
+    /// Whether the watched microphone is the one apps record from by
+    /// default. `false` while [`set_prefer_scarlett`](Self::set_prefer_scarlett)
+    /// picked a Scarlett input other than the default: muting it then leaves
+    /// the default microphone live.
+    fn watches_default(&self) -> bool {
+        true
+    }
 }
 
 /// Which capture endpoint to watch when the Scarlett is preferred.
@@ -322,16 +329,17 @@ mod wasapi {
 
     /// The microphone to watch: the Windows default, or with
     /// `prefer_scarlett` an active Focusrite input (see [`scarlett_choice`]).
+    /// The flag tells whether the result is the default microphone.
     unsafe fn pick_device(
         enumerator: &IMMDeviceEnumerator,
         prefer_scarlett: bool,
-    ) -> Result<IMMDevice> {
+    ) -> Result<(IMMDevice, bool)> {
         unsafe {
             let default = enumerator
                 .GetDefaultAudioEndpoint(eCapture, eConsole)
                 .map_err(|e| AudioError::InitFailed(format!("GetDefaultAudioEndpoint: {e}")));
             if !prefer_scarlett {
-                return default;
+                return default.map(|d| (d, true));
             }
             let active: Vec<IMMDevice> =
                 match enumerator.EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE) {
@@ -346,8 +354,15 @@ mod wasapi {
             let names: Vec<Option<String>> = active.iter().map(|d| friendly_name(d)).collect();
             let default_name = default.as_ref().ok().and_then(|d| friendly_name(d));
             match scarlett_choice(default_name.as_deref(), &names) {
-                EndpointChoice::Listed(i) => Ok(active[i].clone()),
-                EndpointChoice::Default => default,
+                EndpointChoice::Listed(i) => {
+                    // Listed can still be the default when the names differ
+                    // only by how they were read; the ID settles it.
+                    let is_default = default.as_ref().is_ok_and(|d| {
+                        device_id(d).is_some_and(|id| device_id(&active[i]) == Some(id))
+                    });
+                    Ok((active[i].clone(), is_default))
+                }
+                EndpointChoice::Default => default.map(|d| (d, true)),
             }
         }
     }
@@ -380,6 +395,8 @@ mod wasapi {
         /// See [`MuteMonitor::set_prefer_scarlett`]. Shared with the
         /// notification client.
         prefer_scarlett: Arc<AtomicBool>,
+        /// See [`MuteMonitor::watches_default`].
+        watches_default: AtomicBool,
     }
 
     // COM pointers are Send-safe with proper initialization per thread.
@@ -406,7 +423,7 @@ mod wasapi {
 
                 let muted = Arc::new(AtomicBool::new(false));
                 let signal = Arc::new((Mutex::new(false), Condvar::new()));
-                let device = pick_device(&enumerator, prefer_scarlett)?;
+                let (device, is_default) = pick_device(&enumerator, prefer_scarlett)?;
                 let endpoint = Endpoint::open(&device, &muted, &signal)?;
 
                 let default_changed = Arc::new(AtomicBool::new(false));
@@ -432,6 +449,7 @@ mod wasapi {
                     retry_at: Mutex::new(None),
                     generation: AtomicU64::new(0),
                     prefer_scarlett,
+                    watches_default: AtomicBool::new(is_default),
                 })
             }
         }
@@ -490,6 +508,10 @@ mod wasapi {
             WasapiMonitor::device_name(self)
         }
 
+        fn watches_default(&self) -> bool {
+            self.watches_default.load(Ordering::SeqCst)
+        }
+
         fn is_stale(&self) -> bool {
             self.retry_at.lock().is_ok_and(|r| r.is_some())
         }
@@ -510,21 +532,29 @@ mod wasapi {
             };
             let prefer_scarlett = self.prefer_scarlett.load(Ordering::SeqCst);
             let opened = unsafe {
-                pick_device(&self.enumerator, prefer_scarlett).and_then(|device| {
+                pick_device(&self.enumerator, prefer_scarlett).and_then(|(device, is_default)| {
                     let id = device_id(&device);
                     if id.is_some() && id == endpoint.id {
                         // A notification that leaves the choice as it was.
-                        return Ok(None);
+                        return Ok((None, is_default));
                     }
-                    Endpoint::open(&device, &self.muted, &self.signal).map(Some)
+                    Endpoint::open(&device, &self.muted, &self.signal)
+                        .map(|opened| (Some(opened), is_default))
                 })
             };
+            // Only a microphone actually watched updates the flag: after a
+            // failed switch the monitor still watches the previous one.
+            if let Ok((_, is_default)) = &opened {
+                self.watches_default.store(*is_default, Ordering::SeqCst);
+            }
             match opened {
-                Ok(None) => {
+                Ok((None, _)) => {
+                    // A new default can leave the watched input as it was
+                    // while changing whether it is the default (stored above).
                     *retry_at = None;
                     false
                 }
-                Ok(Some(new_endpoint)) => {
+                Ok((Some(new_endpoint), _)) => {
                     *retry_at = None;
                     log::info!(
                         "[audio] now watching microphone: {}",

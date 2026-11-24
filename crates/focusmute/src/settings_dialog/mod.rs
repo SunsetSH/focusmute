@@ -12,11 +12,12 @@
 
 use focusmute_lib::config::Config;
 use focusmute_lib::device::DeviceInfo;
-use std::sync::Arc;
 
-/// Invoked by the settings window when the already-registered mute hotkey is
-/// pressed. The tray owns the audio monitor; the dialog only forwards events.
-pub type SettingsToggleCallback = Arc<dyn Fn() + Send + Sync + 'static>;
+/// One step of the tray, run by the modal settings window on every frame so
+/// mute, hotkeys and device events keep working while it is open. The
+/// argument is whether the window is recording a shortcut (hotkeys must not
+/// act then); returning `false` asks the window to close (the tray quits).
+pub type TrayTick<'t> = &'t mut dyn FnMut(bool) -> bool;
 
 #[cfg(any(windows, target_os = "linux"))]
 mod ui;
@@ -26,8 +27,8 @@ const MAX_SOUND_FILE_BYTES: u64 = 10 * 1024 * 1024;
 
 /// Stateless preview player for the settings dialog.
 ///
-/// Kept as a struct to minimise caller churn; each `play()` call spawns a
-/// short-lived playback thread and holds no WASAPI state between calls.
+/// Kept as a struct to minimise caller churn; each `play()` goes through
+/// [`crate::sound::play_sound`] and holds no audio stream between calls.
 #[cfg(any(windows, target_os = "linux"))]
 pub(crate) struct SoundPreviewPlayer;
 
@@ -37,10 +38,34 @@ impl SoundPreviewPlayer {
         SoundPreviewPlayer
     }
 
-    pub fn play(&mut self, path: &str, preset: &str, event: crate::sound::SoundEvent, volume: f32) {
-        let (sound, _warning) = crate::sound::load_sound_data(path, preset, event);
+    /// Play the sound the tray would play. A custom file that does not decode
+    /// falls back to the built-in sound, as in the tray, and returns `false`
+    /// so the dialog can say why the built-in sound was heard.
+    pub fn play(
+        &mut self,
+        path: &str,
+        preset: &str,
+        event: crate::sound::SoundEvent,
+        volume: f32,
+    ) -> bool {
+        let (sound, warning) = crate::sound::load_sound_data(path, preset, event);
         crate::sound::play_sound(&sound, volume);
+        warning.is_none()
     }
+}
+
+/// The message for a custom sound file that exists but does not decode as
+/// WAV, or `None` when it is fine (or empty, missing or unreadable, which
+/// the config validation reports itself).
+#[cfg(any(windows, target_os = "linux"))]
+pub(crate) fn wav_error(language: &str, path: &str) -> Option<String> {
+    let path = path.trim();
+    if path.is_empty() || std::fs::metadata(path).is_err() {
+        return None;
+    }
+    // The preset only picks the fallback, which is not used here.
+    let (_, warning) = crate::sound::load_sound_data(path, "chip", crate::sound::SoundEvent::Mute);
+    warning.map(|_| crate::i18n::trf(language, "sound_file_invalid", &[("path", path)]))
 }
 
 /// Build the mute_inputs dropdown items and find the selected index.
@@ -92,7 +117,7 @@ pub fn show_settings(
     config: &Config,
     input_count: usize,
     device_info: Option<&DeviceInfo>,
-    toggle_callback: Option<SettingsToggleCallback>,
+    tray_tick: Option<TrayTick<'_>>,
 ) -> Option<Config> {
     #[cfg(any(windows, target_os = "linux"))]
     {
@@ -137,7 +162,7 @@ pub fn show_settings(
                     is_solo,
                     device_lines,
                     result_for_app,
-                    toggle_callback,
+                    tray_tick,
                     cc,
                 )))
             }),
@@ -151,7 +176,7 @@ pub fn show_settings(
 
     #[cfg(not(any(windows, target_os = "linux")))]
     {
-        let _ = (config, input_count, device_info, toggle_callback);
+        let _ = (config, input_count, device_info, tray_tick);
         log::warn!("[settings] dialog not available on this platform");
         None
     }
@@ -161,6 +186,28 @@ pub fn show_settings(
 mod tests {
     use super::*;
     use focusmute_lib::config::MuteInputs;
+
+    // ── wav_error ──
+
+    /// A file that exists but does not decode is reported; an empty path
+    /// and a missing file are left to the config validation.
+    #[test]
+    fn wav_error_reports_only_an_undecodable_file() {
+        let dir = std::env::temp_dir().join("focusmute_test_wav_error");
+        let _ = std::fs::create_dir_all(&dir);
+        let bad = dir.join("bad.wav");
+        std::fs::write(&bad, b"not a wav").unwrap();
+        let good = dir.join("good.wav");
+        std::fs::write(&good, crate::sound::SOUND_MUTED).unwrap();
+
+        let error = wav_error("en", bad.to_str().unwrap()).expect("bad file reported");
+        assert!(error.contains("bad.wav"), "{error}");
+        assert!(wav_error("en", good.to_str().unwrap()).is_none());
+        assert!(wav_error("en", "").is_none());
+        assert!(wav_error("en", dir.join("missing.wav").to_str().unwrap()).is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     // ── inputs_combo_items ──
 

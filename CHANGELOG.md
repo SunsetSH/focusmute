@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Fixes from the reviews in docs/25.1 and docs/25.2.
+
+### Added
+
+- The tray menu and tooltip say when "Always mute the Scarlett microphone" mutes an input that is not the Windows default microphone
+- Settings report a custom sound file that is not a valid WAV when it is chosen, played or saved, instead of silently playing the built-in sound
+
+### Changed
+
+- The mute sound, tray icon, OSD and hooks react before the Scarlett's LEDs are written, so a slow device no longer delays the sound
+- On Windows the muted-talk blink reads the input meters on its own thread, so a slow read no longer delays mute and unmute
+- The tray keeps working while the settings window is open: hotkeys, push-to-talk, the Direct button, the tray menu and device reconnection act at once, with sound and LEDs, instead of after the window closes
+- The log is appended across restarts; past 1 MB it is moved to `focusmute.old.log` on start
+- A device-removal event drops the Scarlett only if it still does not answer after a retry
+
+### Fixed
+
+- Exit unmuted a microphone that was muted elsewhere (Windows, another app) after FocusMute started; only FocusMute's own mute is undone now
+- Releasing push-to-talk after the default microphone changed muted the new microphone
+- A browser-sync command pending across a microphone switch silenced the next mute's sound
+- The Direct gesture's mute bypassed the double-press protection of the hotkey
+- `focusmute-cli status`, `mute` and `unmute` ignored `--config` when choosing the microphone
+- The `[sound]` log line claimed playback started when `PlaySound` failed
+- A reverse-sync test could fail on a coarse clock
+
 ## [1.2.0] - 2026-11-23
 
 Ports barnumbirr/focusmute 0.12.0 and 0.12.1 (per-device LED offsets, the
