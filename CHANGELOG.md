@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-11-25
+
+### Fixed
+
+- Running the test suite no longer overwrites the user's config file with test values (a mute sound path of `/some/new/path.wav`, the F12 hotkey and Ctrl+Space push-to-talk)
+
 ## [1.3.0] - 2026-11-24
 
 Fixes from the reviews in docs/25.1 and docs/25.2.

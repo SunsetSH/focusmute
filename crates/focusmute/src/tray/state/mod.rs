@@ -220,6 +220,14 @@ pub struct TrayState {
     pub indicator: MuteIndicator,
     pub reconnect: ReconnectState,
     pub ctx: Option<DeviceContext>,
+    /// Where settings are saved. `None` in tests, so they never overwrite
+    /// the user's own config file.
+    config_path: Option<std::path::PathBuf>,
+}
+
+/// The config file the tray saves to.
+fn config_save_path() -> Option<std::path::PathBuf> {
+    if cfg!(test) { None } else { Config::path() }
 }
 
 impl TrayState {
@@ -253,6 +261,7 @@ impl TrayState {
             indicator,
             reconnect: ReconnectState::with_defaults(),
             ctx: Some(ctx),
+            config_path: config_save_path(),
         })
     }
 
@@ -285,6 +294,7 @@ impl TrayState {
             indicator,
             reconnect: ReconnectState::with_defaults(),
             ctx: None,
+            config_path: config_save_path(),
         }
     }
 
@@ -467,11 +477,19 @@ impl TrayState {
 
         // Save to disk and update config
         self.config = new_config;
-        if let Err(e) = self.config.save() {
+        if let Err(e) = self.save_config() {
             log::warn!("[config] could not save: {e}");
         }
 
         warnings
+    }
+
+    /// Save the current config to the user's config file (a no-op in tests).
+    pub fn save_config(&self) -> std::io::Result<()> {
+        match &self.config_path {
+            Some(path) => self.config.save_to(path),
+            None => Ok(()),
+        }
     }
 
     /// Handle settings dialog result: apply config, return what changed.
@@ -609,7 +627,7 @@ pub fn apply_settings_result(
             reverted = true;
         }
         if reverted {
-            if let Err(e) = state.config.save() {
+            if let Err(e) = state.save_config() {
                 log::warn!("[config] could not save the restored hotkeys: {e}");
             }
             menu.sync_language(&state.config);
@@ -797,6 +815,18 @@ mod tests {
         // The apply_mute inside poll_and_apply will fail → device_lost=true
         assert!(matches!(action, MonitorAction::ApplyMute));
         assert!(device_lost);
+    }
+
+    #[test]
+    fn tests_never_save_to_the_user_config() {
+        let dev = make_mock_device();
+        let state = TrayState::init_with_config(Config::default(), &dev).unwrap();
+        assert!(state.config_path.is_none());
+        assert!(
+            TrayState::init_without_device(Config::default())
+                .config_path
+                .is_none()
+        );
     }
 
     #[test]
